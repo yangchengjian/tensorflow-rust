@@ -33,13 +33,13 @@ fn main() {
 }
 
 fn run() -> Result<(), Box<dyn Error>> {
-    let filename = "examples/regression/model.pb"; // y = w * x + b
+    let filename = "examples/regression_checkpoint/model.pb"; // y = w * x + b
     if !Path::new(filename).exists() {
         return Err(Box::new(
             Status::new_set(
                 Code::NotFound,
                 &format!(
-                    "Run 'python regression.py' to generate \
+                    "Run 'python regression_checkpoint.py' to generate \
                      {} and try again.",
                     filename
                 ),
@@ -73,6 +73,10 @@ fn run() -> Result<(), Box<dyn Error>> {
     let op_train = graph.operation_by_name_required("train")?;
     let op_w = graph.operation_by_name_required("w")?;
     let op_b = graph.operation_by_name_required("b")?;
+    let op_file_path = graph.operation_by_name_required("save/Const")?;
+    let op_save = graph.operation_by_name_required("save/control_dependency")?;
+    let file_path_tensor: Tensor<String> =
+        Tensor::from(String::from("examples/regression_checkpoint/saved.ckpt"));
 
     // Load the test data into the session.
     let mut init_step = SessionRunArgs::new();
@@ -87,6 +91,22 @@ fn run() -> Result<(), Box<dyn Error>> {
     for _ in 0..steps {
         session.run(&mut train_step)?;
     }
+
+    // Save the model.
+    let mut step = SessionRunArgs::new();
+    step.add_feed(&op_file_path, 0, &file_path_tensor);
+    step.add_target(&op_save);
+    session.run(&mut step)?;
+
+    // Initialize variables, to erase trained data.
+    session.run(&mut init_step)?;
+
+    // Load the model.
+    let op_load = graph.operation_by_name_required("save/restore_all")?;
+    let mut step = SessionRunArgs::new();
+    step.add_feed(&op_file_path, 0, &file_path_tensor);
+    step.add_target(&op_load);
+    session.run(&mut step)?;
 
     // Grab the data out of the session.
     let mut output_step = SessionRunArgs::new();

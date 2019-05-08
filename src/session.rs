@@ -1,23 +1,21 @@
-use tf;
+use super::AnyTensor;
+use super::Buffer;
+use super::Code;
+use super::DataType;
+use super::Graph;
+use super::Operation;
+use super::Result;
+use super::SessionOptions;
+use super::Status;
+use super::Tensor;
+use super::TensorType;
+use crate::tf;
 use libc::{c_char, c_int};
 use std::ffi::CStr;
 use std::ffi::CString;
 use std::marker;
 use std::path::Path;
 use std::ptr;
-use super::AnyTensor;
-use super::{Buffer, BufferTrait};
-use super::Code;
-use super::DataType;
-use super::Graph;
-use super::GraphTrait;
-use super::Operation;
-use super::OperationTrait;
-use super::Result;
-use super::SessionOptions;
-use super::Status;
-use super::Tensor;
-use super::TensorType;
 
 /// Aggregation type for a saved model bundle.
 #[derive(Debug)]
@@ -29,40 +27,42 @@ pub struct SavedModelBundle {
 }
 
 impl SavedModelBundle {
-
     /// Loads a session from an exported model, creating a bundle
-    pub fn load<P: AsRef<Path>, Tag: AsRef<str>, Tags: IntoIterator<Item = Tag>>
-        (options: &SessionOptions,
-         tags: Tags,
-         graph: &mut Graph,
-         export_dir: P)
-         -> Result<SavedModelBundle> {
+    pub fn load<P: AsRef<Path>, Tag: AsRef<str>, Tags: IntoIterator<Item = Tag>>(
+        options: &SessionOptions,
+        tags: Tags,
+        graph: &mut Graph,
+        export_dir: P,
+    ) -> Result<SavedModelBundle> {
         let mut status = Status::new();
 
-        let export_dir_cstr =
-            export_dir.as_ref()
-                     .to_str()
-                     .and_then(|s| CString::new(s.as_bytes()).ok())
-                     .ok_or_else(|| invalid_arg!("Invalid export directory path"))?;
+        let export_dir_cstr = export_dir
+            .as_ref()
+            .to_str()
+            .and_then(|s| CString::new(s.as_bytes()).ok())
+            .ok_or_else(|| invalid_arg!("Invalid export directory path"))?;
 
-        let tags_cstr: Vec<_> = tags.into_iter()
-                                    .map(|t| CString::new(t.as_ref()))
-                                    .collect::<::std::result::Result<_, _>>()
-                                    .map_err(|_| invalid_arg!("Invalid tag name"))?;
+        let tags_cstr: Vec<_> = tags
+            .into_iter()
+            .map(|t| CString::new(t.as_ref()))
+            .collect::<::std::result::Result<_, _>>()
+            .map_err(|_| invalid_arg!("Invalid tag name"))?;
         let tags_ptr: Vec<*const c_char> = tags_cstr.iter().map(|t| t.as_ptr()).collect();
 
         // The empty TF_Buffer will be filled by LoadSessionFromSavedModel
         let mut meta = unsafe { Buffer::<u8>::from_ptr(ptr::null_mut(), 0) };
 
         let inner = unsafe {
-            tf::TF_LoadSessionFromSavedModel(options.inner,
-                                             ptr::null(),
-                                             export_dir_cstr.as_ptr(),
-                                             tags_ptr.as_ptr(),
-                                             tags_ptr.len() as c_int,
-                                             graph.inner(),
-                                             meta.inner_mut(),
-                                             status.inner())
+            tf::TF_LoadSessionFromSavedModel(
+                options.inner,
+                ptr::null(),
+                export_dir_cstr.as_ptr(),
+                tags_ptr.as_ptr(),
+                tags_ptr.len() as c_int,
+                graph.inner(),
+                meta.inner_mut(),
+                status.inner(),
+            )
         };
         if inner.is_null() {
             Err(status)
@@ -70,11 +70,10 @@ impl SavedModelBundle {
             let session = Session { inner: inner };
             Ok(SavedModelBundle {
                 session: session,
-                meta_graph_def: Vec::from(meta.as_ref())
+                meta_graph_def: Vec::from(meta.as_ref()),
             })
         }
     }
-    
 }
 
 /// Manages a single graph and execution.
@@ -85,6 +84,8 @@ pub struct Session {
 
 impl Session {
     /// Creates a session.
+    /// `graph` will be be kept alive for the lifetime of the returned session.
+    /// New nodes can still be added to `graph` after this call.
     pub fn new(options: &SessionOptions, graph: &Graph) -> Result<Self> {
         let mut status = Status::new();
         let inner = unsafe { tf::TF_NewSession(graph.inner(), options.inner, status.inner()) };
@@ -96,35 +97,39 @@ impl Session {
     }
 
     /// Loads a session from an exported model.
-    pub fn from_saved_model<P: AsRef<Path>, Tag: AsRef<str>, Tags: IntoIterator<Item = Tag>>
-        (options: &SessionOptions,
-         tags: Tags,
-         graph: &mut Graph,
-         export_dir: P)
-         -> Result<Self> {
+    pub fn from_saved_model<P: AsRef<Path>, Tag: AsRef<str>, Tags: IntoIterator<Item = Tag>>(
+        options: &SessionOptions,
+        tags: Tags,
+        graph: &mut Graph,
+        export_dir: P,
+    ) -> Result<Self> {
         let mut status = Status::new();
 
-        let export_dir_cstr = export_dir.as_ref()
-                     .to_str()
-                     .and_then(|s| CString::new(s.as_bytes()).ok())
-                     .ok_or_else(|| invalid_arg!("Invalid export directory path"))?;
+        let export_dir_cstr = export_dir
+            .as_ref()
+            .to_str()
+            .and_then(|s| CString::new(s.as_bytes()).ok())
+            .ok_or_else(|| invalid_arg!("Invalid export directory path"))?;
 
-        let tags_cstr: Vec<_> = tags.into_iter()
-                                    .map(|t| CString::new(t.as_ref()))
-                                    .collect::<::std::result::Result<_, _>>()
-                                    .map_err(|_| invalid_arg!("Invalid tag name"))?;
+        let tags_cstr: Vec<_> = tags
+            .into_iter()
+            .map(|t| CString::new(t.as_ref()))
+            .collect::<::std::result::Result<_, _>>()
+            .map_err(|_| invalid_arg!("Invalid tag name"))?;
         // keeping tags_cstr to retain strings in memory
         let tags_ptr: Vec<*const c_char> = tags_cstr.iter().map(|t| t.as_ptr()).collect();
 
         let inner = unsafe {
-            tf::TF_LoadSessionFromSavedModel(options.inner,
-                                             ptr::null(),
-                                             export_dir_cstr.as_ptr(),
-                                             tags_ptr.as_ptr(),
-                                             tags_ptr.len() as c_int,
-                                             graph.inner(),
-                                             ptr::null_mut(),
-                                             status.inner())
+            tf::TF_LoadSessionFromSavedModel(
+                options.inner,
+                ptr::null(),
+                export_dir_cstr.as_ptr(),
+                tags_ptr.as_ptr(),
+                tags_ptr.len() as c_int,
+                graph.inner(),
+                ptr::null_mut(),
+                status.inner(),
+            )
         };
         if inner.is_null() {
             Err(status)
@@ -142,8 +147,11 @@ impl Session {
         status.into_result()
     }
 
-    /// Runs the graph, feeding the inputs and then fetching the outputs requested in the step.
-    pub fn run(&mut self, step: &mut StepWithGraph) -> Result<()> {
+    /// Runs the graph, feeding the inputs and then fetching the outputs
+    /// requested in the step.  Note that the session has interior mutability;
+    /// this may mutate variables in the graph, and the caller is responsible
+    /// for handling race conditions.
+    pub fn run(&self, step: &mut SessionRunArgs<'_>) -> Result<()> {
         // In case we're running it a second time and not all outputs were taken out.
         step.drop_output_tensors();
 
@@ -151,18 +159,20 @@ impl Session {
         let maybe_tensors: Result<_> = step.input_tensors.iter().map(|t| t.inner()).collect();
         let input_tensors: Vec<_> = maybe_tensors?;
         unsafe {
-            tf::TF_SessionRun(self.inner,
-                              ptr::null(),
-                              step.input_ports.as_ptr(),
-                              input_tensors.as_ptr() as *const *const tf::TF_Tensor,
-                              input_tensors.len() as c_int,
-                              step.output_ports.as_ptr(),
-                              step.output_tensors.as_mut_ptr(),
-                              step.output_tensors.len() as c_int,
-                              step.target_operations.as_mut_ptr(),
-                              step.target_operations.len() as c_int,
-                              ptr::null_mut(),
-                              status.inner());
+            tf::TF_SessionRun(
+                self.inner,
+                ptr::null(),
+                step.input_ports.as_ptr(),
+                input_tensors.as_ptr() as *const *const tf::TF_Tensor,
+                input_tensors.len() as c_int,
+                step.output_ports.as_ptr(),
+                step.output_tensors.as_mut_ptr(),
+                step.output_tensors.len() as c_int,
+                step.target_operations.as_mut_ptr(),
+                step.target_operations.len() as c_int,
+                ptr::null_mut(),
+                status.inner(),
+            );
         };
         status.into_result()
     }
@@ -191,10 +201,15 @@ impl Session {
                     if !status.is_ok() {
                         return Err(status);
                     }
+                    let incarnation = tf::TF_DeviceListIncarnation(list, i, status.inner);
+                    if !status.is_ok() {
+                        return Err(status);
+                    }
                     devices.push(Device {
                         name: CStr::from_ptr(c_name).to_str()?.to_string(),
                         device_type: CStr::from_ptr(c_type).to_str()?.to_string(),
                         memory_bytes: bytes,
+                        incarnation,
                     });
                 }
                 Ok(devices)
@@ -215,13 +230,21 @@ impl Drop for Session {
     }
 }
 
+unsafe impl Send for Session {}
+
+unsafe impl Sync for Session {}
+
 ////////////////////////
 
 /// An opaque token for retrieving an output from a computation.
-#[derive(Copy,Clone,Debug)]
-pub struct OutputToken {
+#[derive(Copy, Clone, Debug)]
+pub struct FetchToken {
     index: usize,
 }
+
+/// Deprecated alias for FetchToken.
+#[deprecated(note = "Use FetchToken instead.", since = "0.10.0")]
+pub type OutputToken = FetchToken;
 
 /// Manages the inputs and outputs for a single execution of a graph.
 ///
@@ -229,11 +252,22 @@ pub struct OutputToken {
 /// adding some inputs to it, requesting some outputs, passing it to `Session::run`
 /// and then taking the outputs out of it.
 ///
-/// This will be renamed to Step once the old API goes away.
+/// Example:
+///
+/// ```rust,ignore
+/// let mut args = SessionRunArgs::new();
+/// args.add_feed(&op1, 0, &tensor1);
+/// args.add_feed(&op2, 0, &tensor2);
+/// let result_token = args.request_fetch(&op3, 0);
+/// session.run(&mut args)?;
+/// let result_tensor = args.fetch(result_token)?;
+/// ```
+///
+/// See examples/addition.rs for a more concrete example.
 #[derive(Debug)]
-pub struct StepWithGraph<'l> {
+pub struct SessionRunArgs<'l> {
     input_ports: Vec<tf::TF_Output>,
-    input_tensors: Vec<&'l AnyTensor>,
+    input_tensors: Vec<&'l dyn AnyTensor>,
 
     output_ports: Vec<tf::TF_Output>,
     output_tensors: Vec<*mut tf::TF_Tensor>,
@@ -243,10 +277,10 @@ pub struct StepWithGraph<'l> {
     phantom: marker::PhantomData<&'l ()>,
 }
 
-impl<'l> StepWithGraph<'l> {
-    /// Creates a StepWithGraph.
+impl<'l> SessionRunArgs<'l> {
+    /// Creates a SessionRunArgs.
     pub fn new() -> Self {
-        StepWithGraph {
+        SessionRunArgs {
             input_ports: vec![],
             input_tensors: vec![],
 
@@ -259,59 +293,101 @@ impl<'l> StepWithGraph<'l> {
         }
     }
 
-    /// Adds an input to be fed to the graph.
-    pub fn add_input<T: TensorType>(&mut self,
-                                    operation: &Operation,
-                                    index: c_int,
-                                    tensor: &'l Tensor<T>) {
+    /// Adds an input to be fed to the graph. The index selects which output of
+    /// the operation to feed. For most operations, there is only one output,
+    /// so the index should be 0.
+    pub fn add_feed<T: TensorType>(
+        &mut self,
+        operation: &Operation,
+        index: c_int,
+        tensor: &'l Tensor<T>,
+    ) {
         self.input_ports.push(tf::TF_Output {
-                                  oper: operation.inner(),
-                                  index: index,
-                              });
+            oper: operation.inner(),
+            index: index,
+        });
         self.input_tensors.push(tensor);
     }
 
-    /// Requests that an output is fetched from the graph after running this step.
-    /// Returns an index that you can then use to fetch this output from the step after running it.
-    pub fn request_output(&mut self, operation: &Operation, index: c_int) -> OutputToken {
-        self.output_ports.push(tf::TF_Output {
-                                   oper: operation.inner(),
-                                   index: index,
-                               });
-        self.output_tensors.push(ptr::null_mut());
-        OutputToken { index: self.output_tensors.len() - 1 }
+    /// Deprecated alias for add_feed.
+    #[deprecated(note = "Use add_feed instead.", since = "0.10.0")]
+    pub fn add_input<T: TensorType>(
+        &mut self,
+        operation: &Operation,
+        index: c_int,
+        tensor: &'l Tensor<T>,
+    ) {
+        self.add_feed(operation, index, tensor)
     }
 
-    /// Extracts a tensor output given an index. A given index can only be extracted
-    /// once per `Session::run`.
-    /// Returns an error if output_idx is out of range, output is unavailable or the
-    /// requested type does not match the type of the actual tensor.
-    pub fn take_output<T: TensorType>(&mut self, token: OutputToken) -> Result<Tensor<T>> {
+    /// Requests that an output is fetched from the graph after running this
+    /// step. The index selects which output of the operation to return. For
+    /// most operations, there is only one output, so the index should be 0.
+    /// Returns a token that you can then use to fetch this output from the args
+    /// after running it.
+    pub fn request_fetch(&mut self, operation: &Operation, index: c_int) -> FetchToken {
+        self.output_ports.push(tf::TF_Output {
+            oper: operation.inner(),
+            index: index,
+        });
+        self.output_tensors.push(ptr::null_mut());
+        FetchToken {
+            index: self.output_tensors.len() - 1,
+        }
+    }
+
+    /// Deprecated alias for request_fetch.
+    #[deprecated(note = "Use request_fetch instead.", since = "0.10.0")]
+    #[allow(deprecated)]
+    pub fn request_output(&mut self, operation: &Operation, index: c_int) -> OutputToken {
+        self.request_fetch(operation, index)
+    }
+
+    /// Extracts a tensor output given a token. A given token can only be
+    /// extracted once per `Session::run`. Returns an error if the token is
+    /// invalid, output is unavailable or the requested type does not match the
+    /// type of the actual tensor.
+    pub fn fetch<T: TensorType>(&mut self, token: FetchToken) -> Result<Tensor<T>> {
         let output_idx = token.index;
         if output_idx >= self.output_tensors.len() {
-            return Err(Status::new_set(Code::OutOfRange,
-                                       &format!("Requested output index is out of range: {} vs \
-                                                 {}",
-                                                output_idx,
-                                                self.output_tensors.len()))
-                               .unwrap());
+            return Err(Status::new_set(
+                Code::OutOfRange,
+                &format!(
+                    "Requested output index is out of range: {} vs \
+                     {}",
+                    output_idx,
+                    self.output_tensors.len()
+                ),
+            )
+            .unwrap());
         }
         if self.output_tensors[output_idx].is_null() {
-            return Err(Status::new_set(Code::Unavailable,
-                                       "Output not available. Either it was already taken, or \
-                                        this step has not been sucessfully run yet.")
-                               .unwrap());
+            return Err(Status::new_set(
+                Code::Unavailable,
+                "Output not available. Either it was already taken, or \
+                 this step has not been sucessfully run yet.",
+            )
+            .unwrap());
         }
         let actual_data_type = self.output_data_type(output_idx).unwrap();
         if actual_data_type != T::data_type() {
-            return Err(invalid_arg!("Requested tensor type does not match actual tensor type: \
-                                     {} vs {}",
-                                    actual_data_type,
-                                    T::data_type()));
+            return Err(invalid_arg!(
+                "Requested tensor type does not match actual tensor type: \
+                 {} vs {}",
+                actual_data_type,
+                T::data_type()
+            ));
         }
         let tensor = unsafe { Tensor::from_tf_tensor(self.output_tensors[output_idx]).unwrap() };
         self.output_tensors[output_idx] = ptr::null_mut();
         Ok(tensor)
+    }
+
+    /// Deprecated alias for fetch.
+    #[deprecated(note = "Use fetch instead.", since = "0.10.0")]
+    #[allow(deprecated)]
+    pub fn take_output<T: TensorType>(&mut self, token: OutputToken) -> Result<Tensor<T>> {
+        self.fetch(token)
     }
 
     /// Adds a target operation to be executed when running the graph.
@@ -328,11 +404,15 @@ impl<'l> StepWithGraph<'l> {
         if self.output_tensors[output_idx].is_null() {
             return None;
         }
-        unsafe { Some(DataType::from_c(tf::TF_TensorType(self.output_tensors[output_idx]))) }
+        unsafe {
+            Some(DataType::from_c(tf::TF_TensorType(
+                self.output_tensors[output_idx],
+            )))
+        }
     }
 
     fn drop_output_tensors(&mut self) {
-        for mut tensor in &mut self.output_tensors {
+        for tensor in &mut self.output_tensors {
             // TODO: Is TF_DeleteTensor NULL safe?
             if !tensor.is_null() {
                 unsafe {
@@ -344,16 +424,20 @@ impl<'l> StepWithGraph<'l> {
     }
 }
 
-impl<'l> Drop for StepWithGraph<'l> {
+impl<'l> Drop for SessionRunArgs<'l> {
     fn drop(&mut self) {
         self.drop_output_tensors();
     }
 }
 
+/// Deprecated alias for SessionRunArgs.
+#[deprecated(note = "Use SessionRunArgs instead.", since = "0.10.0")]
+pub type StepWithGraph<'l> = SessionRunArgs<'l>;
+
 ////////////////////////
 
 /// Metadata about a device.
-#[derive(Debug,Eq,PartialEq,Clone,Hash)]
+#[derive(Debug, Eq, PartialEq, Clone, Hash)]
 pub struct Device {
     /// Full name of the device (e.g. /job:worker/replica:0/...)
     pub name: String,
@@ -363,20 +447,22 @@ pub struct Device {
 
     /// Amount of memory on the device.
     pub memory_bytes: i64,
+
+    /// Incarnation number of the device.
+    pub incarnation: u64,
 }
 
 ////////////////////////
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::DataType;
     use super::super::Graph;
     use super::super::Operation;
-    use super::super::Output;
     use super::super::SessionOptions;
     use super::super::Shape;
     use super::super::Tensor;
+    use super::*;
 
     fn create_session() -> (Session, Operation, Operation) {
         let mut g = Graph::new();
@@ -396,14 +482,8 @@ mod tests {
         };
         let y = {
             let mut nd = g.new_operation("Mul", "y").unwrap();
-            nd.add_input(Output {
-                             operation: two,
-                             index: 0,
-                         });
-            nd.add_input(Output {
-                             operation: x.clone(),
-                             index: 0,
-                         });
+            nd.add_input(two);
+            nd.add_input(x.clone());
             nd.finish().unwrap()
         };
         let options = SessionOptions::new();
@@ -427,15 +507,15 @@ mod tests {
 
     #[test]
     fn test_run() {
-        let (mut session, x_operation, y_operation) = create_session();
+        let (session, x_operation, y_operation) = create_session();
         let mut x = <Tensor<f32>>::new(&[2]);
         x[0] = 2.0;
         x[1] = 3.0;
-        let mut step = StepWithGraph::new();
-        step.add_input(&x_operation, 0, &x);
-        let output_token = step.request_output(&y_operation, 0);
+        let mut step = SessionRunArgs::new();
+        step.add_feed(&x_operation, 0, &x);
+        let output_token = step.request_fetch(&y_operation, 0);
         session.run(&mut step).unwrap();
-        let output_tensor = step.take_output::<f32>(output_token).unwrap();
+        let output_tensor = step.fetch::<f32>(output_token).unwrap();
         assert_eq!(output_tensor.len(), 2);
         assert_eq!(output_tensor[0], 4.0);
         assert_eq!(output_tensor[1], 6.0);
@@ -449,7 +529,8 @@ mod tests {
             &["train", "serve"],
             &mut graph,
             "test_resources/regression-model",
-        ).unwrap();
+        )
+        .unwrap();
 
         let x_op = graph.operation_by_name_required("x").unwrap();
         let y_op = graph.operation_by_name_required("y").unwrap();
@@ -457,7 +538,7 @@ mod tests {
         let _train_op = graph.operation_by_name_required("train").unwrap();
 
         let SavedModelBundle {
-            mut session,
+            session,
             meta_graph_def,
         } = bundle;
 
@@ -467,12 +548,12 @@ mod tests {
         x[0] = 2.0;
         let mut y = <Tensor<f32>>::new(&[1]);
         y[0] = 4.0;
-        let mut step = StepWithGraph::new();
-        step.add_input(&x_op, 0, &x);
-        step.add_input(&y_op, 0, &y);
-        let output_token = step.request_output(&y_hat_op, 0);
+        let mut step = SessionRunArgs::new();
+        step.add_feed(&x_op, 0, &x);
+        step.add_feed(&y_op, 0, &y);
+        let output_token = step.request_fetch(&y_hat_op, 0);
         session.run(&mut step).unwrap();
-        let output_tensor = step.take_output::<f32>(output_token).unwrap();
+        let output_tensor = step.fetch::<f32>(output_token).unwrap();
         assert_eq!(output_tensor.len(), 1);
     }
 
@@ -480,6 +561,10 @@ mod tests {
     fn test_device_list() {
         let (session, _, _) = create_session();
         let devices = session.device_list().unwrap();
-        assert!(devices.iter().any(|d| d.device_type == "CPU"), "devices: {:?}", devices);
+        assert!(
+            devices.iter().any(|d| d.device_type == "CPU"),
+            "devices: {:?}",
+            devices
+        );
     }
 }

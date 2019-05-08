@@ -1,19 +1,21 @@
 //! This crate provides Rust bindings for the
 //! [`TensorFlow`](https://www.tensorflow.org) machine learning library.
+//!
+//! If you aren't sure how to use something, please see the
+//! [examples](https://github.com/tensorflow/rust/tree/master/examples) folder.
 
-#![warn(missing_copy_implementations,
-        missing_debug_implementations,
-        missing_docs,
-        trivial_casts,
-        trivial_numeric_casts,
-        unused_extern_crates,
-        unused_import_braces,
-        unused_qualifications)]
+#![warn(
+    missing_copy_implementations,
+    missing_debug_implementations,
+    missing_docs,
+    trivial_casts,
+    trivial_numeric_casts,
+    unused_extern_crates,
+    unused_import_braces,
+    unused_qualifications
+)]
 
-extern crate libc;
-extern crate num_complex;
-extern crate tensorflow_sys as tf;
-
+use half::f16;
 use libc::{c_int, c_uint};
 use num_complex::Complex;
 use std::cell::Cell;
@@ -22,11 +24,13 @@ use std::cmp::Ordering;
 use std::error::Error;
 use std::ffi::CStr;
 use std::ffi::CString;
+use std::ffi::IntoStringError;
 use std::ffi::NulError;
+use std::fmt;
 use std::fmt::Debug;
 use std::fmt::Display;
 use std::fmt::Formatter;
-use std::fmt;
+use std::marker::PhantomData;
 use std::mem;
 use std::ops::Deref;
 use std::ops::DerefMut;
@@ -36,71 +40,58 @@ use std::os::raw::c_char;
 use std::ptr;
 use std::slice;
 use std::str::Utf8Error;
+use tensorflow_sys as tf;
 
 ////////////////////////
 
 /// Will panic if `msg` contains an embedded 0 byte.
 macro_rules! invalid_arg {
   ($fmt:expr) => {
-    Status::new_set(Code::InvalidArgument, $fmt).unwrap()
+    crate::Status::new_set(crate::Code::InvalidArgument, $fmt).unwrap()
   };
   ($fmt:expr, $($arg:tt)*) => ({
     let msg = format!($fmt, $($arg)*);
-    Status::new_set(Code::InvalidArgument, &msg).unwrap()
+    crate::Status::new_set(crate::Code::InvalidArgument, &msg).unwrap()
   });
 }
 
 ////////////////////////
 
 macro_rules! impl_new {
-  ($name: ident, $call:ident, $doc:expr) => {
-    impl $name {
-      #[doc = $doc]
-      pub fn new() -> Self {
-        unsafe {
-          let inner = tf::$call();
-          assert!(!inner.is_null());
-          $name {
-            inner: inner,
-          }
+    ($name: ident, $call:ident, $doc:expr) => {
+        impl $name {
+            #[doc = $doc]
+            pub fn new() -> Self {
+                unsafe {
+                    let inner = tf::$call();
+                    assert!(!inner.is_null());
+                    $name { inner: inner }
+                }
+            }
         }
-      }
-    }
-  }
+    };
 }
 
 ////////////////////////
 
 macro_rules! impl_drop {
-  ($name: ident, $call:ident) => {
-    impl Drop for $name {
-      fn drop(&mut self) {
-        unsafe {
-          tf::$call(self.inner);
+    ($name: ident, $call:ident) => {
+        impl Drop for $name {
+            fn drop(&mut self) {
+                unsafe {
+                    tf::$call(self.inner);
+                }
+            }
         }
-      }
-    }
-  }
+    };
 }
 
 ////////////////////////
 
-// We would like to use the pattern:
-//   ($doc:expr, $c_name:ident, $enum_name:ident
-//      { $( $(#[$attr:meta])* $name:ident = $num:expr),* })
-// so the enum variants would look like:
-//   /// Denotes a foo.
-//   Foo = 1,
-// but the compiler complains:
-//   error: local ambiguity: multiple parsing options: built-in NTs ident ('name')
-//   or 1 other option.
-// This is https://github.com/rust-lang/rust/issues/24189. Rather than make our
-// macro rules inscrutably convoluted, we'll just make our grammar slightly
-// noisier and insert a 'value' token before the variant name.
 macro_rules! c_enum {
-  ($doc:expr, $c_name:ident, $enum_name:ident { $( $(#[$attr:meta])* value
+  ($c_name:ident, $(#[$enum_attr:meta])* $enum_name:ident { $( $(#[$attr:meta])*
       $name:ident = $num:expr),* }) => {
-    #[doc = $doc]
+    $(#[$enum_attr])*
     #[derive(PartialEq,Eq,PartialOrd,Ord,Debug,Copy,Clone)]
     pub enum $enum_name {
       /// Represents an unrecognized value.
@@ -142,7 +133,7 @@ macro_rules! c_enum {
     }
 
     impl ::std::fmt::Display for $enum_name {
-      fn fmt(&self, f: &mut ::std::fmt::Formatter) -> ::std::fmt::Result {
+      fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
         match self {
           $(&$enum_name::$name => f.write_str(stringify!($name)),)*
           &$enum_name::UnrecognizedEnumValue(c) => write!(f, "UnrecognizedEnumValue({})", c),
@@ -150,24 +141,38 @@ macro_rules! c_enum {
       }
     }
   };
-  ($doc:expr, $c_name:ident, $enum_name:ident { $( $(#[$attr:meta])* value
+  ($c_name:ident, $(#[$enum_attr:meta])* $enum_name:ident { $( $(#[$attr:meta])*
       $name:ident = $num:expr,)* }) => {
-    c_enum!($doc, $c_name, $enum_name { $( $(#[$attr])* value $name = $num),* });
+    c_enum!($c_name, $(#[$enum_attr])* $enum_name { $( $(#[$attr])* $name = $num),* });
+  };
+  // Deprecated pattern.
+  ($doc:expr, $c_name:ident, $(#[$enum_attr:meta])* $enum_name:ident { $( $(#[$attr:meta])* value
+      $name:ident = $num:expr),* }) => {
+    c_enum!($c_name, #[doc = $doc] $(#[$enum_attr])*
+            $enum_name { $( $(#[$attr])* $name = $num),* });
+  };
+  // Deprecated pattern.
+  ($doc:expr, $c_name:ident, $(#[$enum_attr:meta])* $enum_name:ident { $( $(#[$attr:meta])* value
+      $name:ident = $num:expr,)* }) => {
+    c_enum!($c_name, #[doc = $doc] $(#[$enum_attr])*
+            $enum_name { $( $(#[$attr])* $name = $num),* });
   }
 }
 
 ////////////////////////
 
 mod buffer;
-use buffer::Buffer;
+use crate::buffer::Buffer;
 
 mod graph;
-pub use graph::*;
+pub use crate::graph::*;
 
 mod session;
-pub use session::*;
+pub use crate::session::*;
 
 pub mod expr;
+
+pub mod io;
 
 ////////////////////////
 
@@ -253,7 +258,7 @@ c_enum!("Error values that can be returned.", TF_Code, Code {
   /// Unlike INVALID_ARGUMENT, this error indicates a problem that may
   /// be fixed if the system state changes. For example, a 32-bit file
   /// system will generate INVALID_ARGUMENT if asked to read at an
-  /// offset that is not in the range [0,2^32-1], but it will generate
+  /// offset that is not in the range [0,2<sup>32</sup>-1], but it will generate
   /// OUT_OF_RANGE if asked to read from an offset past the current
   /// file size.
   ///
@@ -350,6 +355,15 @@ c_enum!("Type of a single tensor element.", TF_DataType, DataType {
 
   /// TensorFlow Resource (name, container, device,...)
   value Resource = 20,
+
+  /// A dynamic type similar to std::any::Any.
+  value Variant = 21,
+
+  /// 32-bit unsigned integer.
+  value UInt32 = 22,
+
+  /// 64-bit unsigned integer.
+  value UInt64 = 23,
 });
 
 ////////////////////////
@@ -361,7 +375,11 @@ pub struct Status {
     inner: *mut tf::TF_Status,
 }
 
-impl_new!(Status, TF_NewStatus, "Creates a status with `Code::Ok` and no message.");
+impl_new!(
+    Status,
+    TF_NewStatus,
+    "Creates a status with `Code::Ok` and no message."
+);
 impl_drop!(Status, TF_DeleteStatus);
 
 impl Status {
@@ -384,7 +402,11 @@ impl Status {
 
     /// Turns the current `Status` into a `Result`.
     fn into_result(self) -> Result<()> {
-        if self.is_ok() { Ok(()) } else { Err(self) }
+        if self.is_ok() {
+            Ok(())
+        } else {
+            Err(self)
+        }
     }
 
     /// Sets the code and message.
@@ -403,7 +425,7 @@ impl Status {
 }
 
 impl Display for Status {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(f, "{}: ", self.code())?;
         let msg = unsafe {
             match CStr::from_ptr(tf::TF_Message(self.inner)).to_str() {
@@ -416,7 +438,7 @@ impl Display for Status {
 }
 
 impl Debug for Status {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(f, "{{inner:{:?}, ", self.inner)?;
         write!(f, "{}: ", self.code())?;
         let msg = unsafe {
@@ -443,6 +465,15 @@ impl From<Utf8Error> for Status {
     }
 }
 
+impl From<IntoStringError> for Status {
+    fn from(e: IntoStringError) -> Self {
+        invalid_arg!(
+            "Error converting C string to Rust string: {}",
+            e.description()
+        )
+    }
+}
+
 impl Error for Status {
     fn description(&self) -> &str {
         unsafe {
@@ -453,7 +484,7 @@ impl Error for Status {
         }
     }
 
-    fn cause(&self) -> Option<&Error> {
+    fn cause(&self) -> Option<&dyn Error> {
         None
     }
 }
@@ -485,21 +516,31 @@ impl SessionOptions {
 
     /// Set the config.
     ///
-    /// `config` should be a serialized brain.ConfigProto proto.
-    /// Returns an error if config was not parsed successfully as a ConfigProto.
+    /// `config` should be a serialized [`ConfigProto` proto](https://github.com/tensorflow/tensorflow/blob/master/tensorflow/core/protobuf/config.proto).
+    /// Returns an error if config was not parsed successfully as a `ConfigProto`.
     pub fn set_config(&mut self, config: &[u8]) -> Result<()> {
         let mut status = Status::new();
         unsafe {
-            tf::TF_SetConfig(self.inner,
-                             config.as_ptr() as *const _,
-                             config.len(),
-                             status.inner());
+            tf::TF_SetConfig(
+                self.inner,
+                config.as_ptr() as *const _,
+                config.len(),
+                status.inner(),
+            );
         }
-        if status.is_ok() { Ok(()) } else { Err(status) }
+        if status.is_ok() {
+            Ok(())
+        } else {
+            Err(status)
+        }
     }
 }
 
-impl_new!(SessionOptions, TF_NewSessionOptions, "Creates a blank set of options.");
+impl_new!(
+    SessionOptions,
+    TF_NewSessionOptions,
+    "Creates a blank set of options."
+);
 impl_drop!(SessionOptions, TF_DeleteSessionOptions);
 
 ////////////////////////
@@ -519,6 +560,12 @@ pub type Result<T> = std::result::Result<T, Status>;
 /// types (such as `bool` and `String`) don't implement them and we need to
 /// supply custom implementations.
 pub trait TensorType: Default + Clone + Display + Debug + 'static {
+    /// Tensor representation for this type. Normally `TensorDataCRepr` for types
+    /// that have the same representation in Rust; or `TensorDataNoCRepr` for
+    /// types where the Rust and C representations differ.
+    #[doc(hidden)]
+    type InnerType: TensorInner<Self>;
+
     /// Returns the DataType that corresponds to this type.
     fn data_type() -> DataType;
 
@@ -547,51 +594,71 @@ pub trait TensorType: Default + Clone + Display + Debug + 'static {
 }
 
 macro_rules! tensor_type {
-  ($rust_type:ty, $tensor_type:ident, $zero:expr, $one:expr) => {
-    impl TensorType for $rust_type {
-      fn data_type() -> DataType {
-        DataType::$tensor_type
-      }
+    ($rust_type:ty, $tensor_type:ident, $zero:expr, $one:expr) => {
+        impl TensorType for $rust_type {
+            type InnerType = TensorDataCRepr<$rust_type>;
 
-      fn zero() -> Self {
-        $zero
-      }
+            fn data_type() -> DataType {
+                DataType::$tensor_type
+            }
 
-      fn one() -> Self {
-        $one
-      }
+            fn zero() -> Self {
+                $zero
+            }
 
-      fn is_repr_c() -> bool {
-        true
-      }
+            fn one() -> Self {
+                $one
+            }
 
-      fn unpack(_data: &[u8], _count: usize) -> Result<Vec<Self>> {
-        Err(Status::new_set(
-            Code::Unimplemented,
-            concat!("Unpacking is not necessary for ", stringify!($rust_type))).unwrap())
-      }
+            fn is_repr_c() -> bool {
+                true
+            }
 
-      fn packed_size(_data: &[Self]) -> usize {
-        0
-      }
+            fn unpack(_data: &[u8], _count: usize) -> Result<Vec<Self>> {
+                Err(Status::new_set(
+                    Code::Unimplemented,
+                    concat!("Unpacking is not necessary for ", stringify!($rust_type)),
+                )
+                .unwrap())
+            }
 
-      fn pack(_data: &[Self], _buffer: &mut [u8]) -> Result<()> {
-        Err(Status::new_set(
-            Code::Unimplemented,
-            concat!("Packing is not necessary for ", stringify!($rust_type))).unwrap())
-      }
-    }
-  }
+            fn packed_size(_data: &[Self]) -> usize {
+                0
+            }
+
+            fn pack(_data: &[Self], _buffer: &mut [u8]) -> Result<()> {
+                Err(Status::new_set(
+                    Code::Unimplemented,
+                    concat!("Packing is not necessary for ", stringify!($rust_type)),
+                )
+                .unwrap())
+            }
+        }
+    };
 }
 
+tensor_type!(f16, Half, half::consts::ZERO, half::consts::ONE);
 tensor_type!(f32, Float, 0.0, 1.0);
 tensor_type!(f64, Double, 0.0, 1.0);
 tensor_type!(i32, Int32, 0, 1);
 tensor_type!(u8, UInt8, 0, 1);
+tensor_type!(u16, UInt16, 0, 1);
+tensor_type!(u32, UInt32, 0, 1);
+tensor_type!(u64, UInt64, 0, 1);
 tensor_type!(i16, Int16, 0, 1);
 tensor_type!(i8, Int8, 0, 1);
-tensor_type!(Complex<f32>, Complex64, Complex::new(0.0, 0.0), Complex::new(1.0, 0.0));
-tensor_type!(Complex<f64>, Complex128, Complex::new(0.0, 0.0), Complex::new(1.0, 0.0));
+tensor_type!(
+    Complex<f32>,
+    Complex64,
+    Complex::new(0.0, 0.0),
+    Complex::new(1.0, 0.0)
+);
+tensor_type!(
+    Complex<f64>,
+    Complex128,
+    Complex::new(0.0, 0.0),
+    Complex::new(1.0, 0.0)
+);
 tensor_type!(i64, Int64, 0, 1);
 tensor_type!(bool, Bool, false, true);
 
@@ -602,7 +669,7 @@ macro_rules! q_type {
     pub struct $q_type($rust_type);
 
     impl Display for $q_type {
-      fn fmt(&self, f: &mut ::std::fmt::Formatter) -> ::std::fmt::Result {
+      fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
         <$rust_type as Display>::fmt(&self.0, f)
       }
     }
@@ -636,11 +703,11 @@ q_type!(i32,
 ////////////////////////
 
 /// BFloat16 provides a Rust type for BFloat16.
-#[derive(Debug,Clone,Copy,Default)]
+#[derive(Debug, Clone, Copy, Default)]
 pub struct BFloat16(u16);
 
 impl Display for BFloat16 {
-    fn fmt(&self, f: &mut Formatter) -> ::std::fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> ::std::fmt::Result {
         let val: f32 = (*self).into();
         Display::fmt(&val, f)
     }
@@ -682,11 +749,18 @@ impl PartialOrd for BFloat16 {
     }
 }
 
-tensor_type!(BFloat16, BFloat16, BFloat16::from(0.0f32), BFloat16::from(1.0f32));
+tensor_type!(
+    BFloat16,
+    BFloat16,
+    BFloat16::from(0.0f32),
+    BFloat16::from(1.0f32)
+);
 
 ////////////////////////
 
 impl TensorType for String {
+    type InnerType = TensorDataNoCRepr<String>;
+
     fn data_type() -> DataType {
         DataType::String
     }
@@ -728,14 +802,15 @@ impl TensorType for String {
     }
 
     fn packed_size(data: &[Self]) -> usize {
-        let string_data: usize = data.iter()
+        let string_data: usize = data
+            .iter()
             .map(|s| unsafe { tf::TF_StringEncodedSize(s.len()) })
             .sum();
         mem::size_of::<u64>() * data.len() + string_data
     }
 
     fn pack(data: &[Self], buffer: &mut [u8]) -> Result<()> {
-        let mut offsets: &mut [u64] =
+        let offsets: &mut [u64] =
             unsafe { slice::from_raw_parts_mut(buffer.as_mut_ptr() as *mut u64, data.len()) };
         let base_offset = mem::size_of::<u64>() * data.len();
         let mut offset = base_offset;
@@ -765,97 +840,86 @@ trait AnyTensor: Debug {
 
 ////////////////////////
 
-/// Holds a multi-dimensional array of elements of a single data type.
-///
-/// The data buffer stores elements in row major order.  E.g. if data is treated
-/// as a vector of `T`:
-///
-/// ```text
-///   element 0:   index (0, ..., 0)
-///   element 1:   index (0, ..., 1)
-///   ...
-/// ```
+unsafe fn tensor_dims(tensor: *mut tf::TF_Tensor) -> Vec<u64> {
+    let mut dims = Vec::with_capacity(tf::TF_NumDims(tensor) as usize);
+    for i in 0..dims.capacity() {
+        dims.push(tf::TF_Dim(tensor, i as c_int) as u64);
+    }
+    dims
+}
+
+/// Inner representation of `Tensor`s.
+#[doc(hidden)]
+pub trait TensorInner<T>: Debug + Clone
+where
+    Self: Sized + Deref<Target = [T]> + DerefMut<Target = [T]>,
+{
+    /// Return the inner representation of a tensor with the given
+    /// dimensions.
+    fn new_inner(dims: &[u64]) -> Self;
+
+    /// Wraps a TF_Tensor. Returns None if types don't match.
+    unsafe fn from_tf_tensor(tensor: *mut tf::TF_Tensor) -> Option<Self>;
+
+    /// Return a mutable pointer to the C tensor.
+    fn as_mut_ptr(&self, dims: &Vec<u64>) -> Result<*mut tf::TF_Tensor>;
+}
+
+////////////////////////
+
+/// Inner representation for `Tensor`s of types where C and Rust have the
+/// same representation.
 #[derive(Debug)]
-pub struct Tensor<T: TensorType> {
-    inner: Cell<*mut tf::TF_Tensor>,
-    /// Points to either the TF_Tensor data or the contents of `unpacked_data`.
-    data: Cell<*mut T>,
-    /// Equal to the product of `dims`.
+#[doc(hidden)]
+pub struct TensorDataCRepr<T>
+where
+    T: TensorType,
+{
+    inner: *mut tf::TF_Tensor,
+    /// Equal to the product of the tensor's dimensions.
     data_count: usize,
-    dims: Vec<u64>,
-    owned: Cell<bool>,
-    unpacked: Cell<bool>,
-    /// This is just an easy way to handle deallocation correctly.  According to
-    /// the aliasing rules, we shouldn't touch this data because it can be
-    /// modified through `data`.
-    unpacked_data: RefCell<Option<Vec<T>>>,
+    phantom: PhantomData<T>,
 }
 
-#[inline]
-fn product(values: &[u64]) -> u64 {
-    values.iter().product()
-}
+unsafe impl<T> Send for TensorDataCRepr<T> where T: TensorType {}
+unsafe impl<T> Sync for TensorDataCRepr<T> where T: TensorType {}
 
-impl<T: TensorType> Tensor<T> {
-    /// Creates a new tensor.
-    ///
-    /// The data is initialized to zeros.
-    pub fn new(dims: &[u64]) -> Self {
-        let total = product(dims) as usize;
-        if T::is_repr_c() {
+impl<T: TensorType> Drop for TensorDataCRepr<T> {
+    fn drop(&mut self) {
+        if !self.inner.is_null() {
             unsafe {
-                let inner = tf::TF_AllocateTensor(
-                    T::data_type().to_c(),
-                    dims.as_ptr() as *const _,
-                    dims.len() as c_int,
-                    total * mem::size_of::<T>(),
-                );
-                Tensor {
-                    inner: Cell::new(inner),
-                    data: Cell::new(tf::TF_TensorData(inner) as *mut T),
-                    data_count: total,
-                    dims: Vec::from(dims),
-                    owned: Cell::new(true),
-                    unpacked: Cell::new(false),
-                    unpacked_data: RefCell::new(None),
-                }
+                tf::TF_DeleteTensor(self.inner);
             }
-        } else {
-            let mut data = Vec::with_capacity(total);
-            data.resize(total, T::zero());
-            Tensor {
-                inner: Cell::new(ptr::null_mut()),
-                data: Cell::new(data.as_mut_ptr()),
+        }
+        self.inner = ptr::null_mut();
+    }
+}
+
+impl<T> TensorInner<T> for TensorDataCRepr<T>
+where
+    T: Debug + TensorType + Copy,
+{
+    fn new_inner(dims: &[u64]) -> Self {
+        let total = product(dims) as usize;
+        unsafe {
+            let inner = tf::TF_AllocateTensor(
+                T::data_type().to_c(),
+                dims.as_ptr() as *const _,
+                dims.len() as c_int,
+                total * mem::size_of::<T>(),
+            );
+
+            // Zero-initialize allocated memory.
+            let data = tf::TF_TensorData(inner);
+            let byte_size = tf::TF_TensorByteSize(inner);
+            libc::memset(data as *mut libc::c_void, 0, byte_size);
+
+            TensorDataCRepr {
+                inner,
                 data_count: total,
-                dims: Vec::from(dims),
-                owned: Cell::new(true),
-                unpacked: Cell::new(true),
-                unpacked_data: RefCell::new(Some(data)),
+                phantom: PhantomData,
             }
         }
-    }
-
-    /// Sets (copies) the tensor values to the provided ones.
-    /// 
-    /// ```
-    /// # use tensorflow::Tensor;
-    /// let a = Tensor::new(&[2, 2]).with_values(&[0_i32, 1, 2, 3]).unwrap();
-    /// ```
-    pub fn with_values(mut self, value: &[T]) -> Result<Self> {
-        if self.len() != value.len() { 
-            return Err(invalid_arg!(
-                "length of values array ({}) is not equal to tensor total elements ({})", 
-                value.len(), self.len()));
-        }
-        for (e, v) in self.iter_mut().zip(value) {
-            e.clone_from(v);
-        }
-        Ok(self)
-    }
-
-    /// Returns the tensor's dimensions.
-    pub fn dims(&self) -> &[u64] {
-        &self.dims
     }
 
     // Wraps a TF_Tensor. Returns None if types don't match.
@@ -863,25 +927,155 @@ impl<T: TensorType> Tensor<T> {
         if DataType::from_c(tf::TF_TensorType(tensor)) != T::data_type() {
             return None;
         }
-        let mut dims = Vec::with_capacity(tf::TF_NumDims(tensor) as usize);
-        for i in 0..dims.capacity() {
-            dims.push(tf::TF_Dim(tensor, i as c_int) as u64);
+        Some(TensorDataCRepr {
+            inner: tensor,
+            data_count: product(&tensor_dims(tensor)) as usize,
+            phantom: PhantomData,
+        })
+    }
+
+    fn as_mut_ptr(&self, _dims: &Vec<u64>) -> Result<*mut tf::TF_Tensor> {
+        assert!(!self.inner.is_null());
+        Ok(self.inner)
+    }
+}
+
+impl<T: TensorType> Deref for TensorDataCRepr<T> {
+    type Target = [T];
+
+    #[inline]
+    fn deref(&self) -> &[T] {
+        let data = unsafe { tf::TF_TensorData(self.inner) } as *mut T;
+        unsafe { slice::from_raw_parts(data, self.data_count) }
+    }
+}
+
+impl<T: TensorType> DerefMut for TensorDataCRepr<T> {
+    #[inline]
+    fn deref_mut(&mut self) -> &mut [T] {
+        let data = unsafe { tf::TF_TensorData(self.inner) } as *mut T;
+        unsafe { slice::from_raw_parts_mut(data, self.data_count) }
+    }
+}
+
+impl<T: TensorType + Copy> Clone for TensorDataCRepr<T> {
+    fn clone(&self) -> Self {
+        let (inner, total) = unsafe {
+            let dims = tensor_dims(self.inner);
+            let total = product(&dims) as usize;
+            let inner = tf::TF_AllocateTensor(
+                T::data_type().to_c(),
+                dims.as_ptr() as *const _,
+                dims.len() as c_int,
+                total * mem::size_of::<T>(),
+            );
+            (inner, total)
+        };
+        let mut clone = TensorDataCRepr {
+            inner,
+            data_count: total,
+            phantom: PhantomData,
+        };
+        clone.deref_mut().copy_from_slice(self.deref());
+        clone
+    }
+}
+
+////////////////////////
+
+/// Inner representation for `Tensor`s of types where C and Rust have
+/// different representations.
+#[derive(Debug)]
+#[doc(hidden)]
+pub struct TensorDataNoCRepr<T>
+where
+    T: TensorType,
+{
+    inner: Cell<*mut tf::TF_Tensor>,
+    /// Points to either the TF_Tensor data or the contents of `unpacked_data`.
+    data: Cell<*mut T>,
+    /// Equal to the product of the tensor's dimensions.
+    data_count: usize,
+    unpacked: Cell<bool>,
+    /// This is just an easy way to handle deallocation correctly.  According to
+    /// the aliasing rules, we shouldn't touch this data because it can be
+    /// modified through `data`.
+    unpacked_data: RefCell<Option<Vec<T>>>,
+}
+
+impl<T> TensorInner<T> for TensorDataNoCRepr<T>
+where
+    T: Debug + TensorType,
+{
+    /// Creates a new tensor.
+    ///
+    /// The data is initialized to zeros.
+    fn new_inner(dims: &[u64]) -> Self {
+        let total = product(dims) as usize;
+        let mut data = Vec::with_capacity(total);
+        data.resize(total, T::zero());
+        TensorDataNoCRepr {
+            inner: Cell::new(ptr::null_mut()),
+
+            data: Cell::new(data.as_mut_ptr()),
+            data_count: total,
+            unpacked: Cell::new(true),
+            unpacked_data: RefCell::new(Some(data)),
         }
-        Some(Tensor {
+    }
+
+    unsafe fn from_tf_tensor(tensor: *mut tf::TF_Tensor) -> Option<Self> {
+        if DataType::from_c(tf::TF_TensorType(tensor)) != T::data_type() {
+            return None;
+        }
+        Some(TensorDataNoCRepr {
             inner: Cell::new(tensor),
             data: Cell::new(tf::TF_TensorData(tensor) as *mut _),
-            data_count: product(&dims) as usize,
-            dims: dims,
-            owned: Cell::new(true),
+            data_count: product(&tensor_dims(tensor)) as usize,
             unpacked: Cell::new(false),
             unpacked_data: RefCell::new(None),
         })
     }
 
+    fn as_mut_ptr(&self, dims: &Vec<u64>) -> Result<*mut tf::TF_Tensor> {
+        let mut inner = self.inner.get();
+
+        if inner.is_null() {
+            let data: &[T] = self;
+            let packed_size = T::packed_size(data);
+            inner = unsafe {
+                let inner = tf::TF_AllocateTensor(
+                    T::data_type().to_c(),
+                    dims.as_ptr() as *const _,
+                    dims.len() as c_int,
+                    packed_size,
+                );
+                let buf =
+                    slice::from_raw_parts_mut(tf::TF_TensorData(inner) as *mut u8, packed_size);
+                T::pack(data, buf)?;
+                inner
+            };
+            self.inner.set(inner);
+        }
+
+        Ok(inner)
+    }
+}
+
+impl<T: TensorType> Drop for TensorDataNoCRepr<T> {
+    fn drop(&mut self) {
+        self.drop_tensor();
+    }
+}
+
+impl<T> TensorDataNoCRepr<T>
+where
+    T: TensorType,
+{
     // This will panic if `unpacked` is false and `unpacked_data` is already borrowed.
     #[allow(trivial_numeric_casts)]
     fn unpack(&self) {
-        if !T::is_repr_c() && !self.unpacked.get() {
+        if !self.unpacked.get() {
             let mut data = self.unpacked_data.borrow_mut();
             let tensor = self.inner.get();
             let bytes = unsafe {
@@ -903,7 +1097,7 @@ impl<T: TensorType> Tensor<T> {
 
     fn drop_tensor(&self) {
         let inner = self.inner.get();
-        if self.owned.get() && !inner.is_null() {
+        if !inner.is_null() {
             unsafe {
                 tf::TF_DeleteTensor(inner);
             }
@@ -912,38 +1106,7 @@ impl<T: TensorType> Tensor<T> {
     }
 }
 
-impl<T: TensorType> Drop for Tensor<T> {
-    fn drop(&mut self) {
-        self.drop_tensor();
-    }
-}
-
-impl<T: TensorType> AnyTensor for Tensor<T> {
-    fn inner(&self) -> Result<*mut tf::TF_Tensor> {
-        let mut inner = self.inner.get();
-        if inner.is_null() {
-            let data: &[T] = self;
-            let packed_size = T::packed_size(data);
-            inner = unsafe {
-                let inner = tf::TF_AllocateTensor(
-                    T::data_type().to_c(),
-                    self.dims.as_ptr() as *const _,
-                    self.dims.len() as c_int,
-                    packed_size,
-                );
-                let mut buf =
-                    slice::from_raw_parts_mut(tf::TF_TensorData(inner) as *mut u8, packed_size);
-                T::pack(data, buf)?;
-                inner
-            };
-            self.inner.set(inner);
-            self.owned.set(true);
-        }
-        Ok(inner)
-    }
-}
-
-impl<T: TensorType> Deref for Tensor<T> {
+impl<T: TensorType> Deref for TensorDataNoCRepr<T> {
     type Target = [T];
 
     #[inline]
@@ -953,21 +1116,121 @@ impl<T: TensorType> Deref for Tensor<T> {
     }
 }
 
-impl<T: TensorType> DerefMut for Tensor<T> {
+impl<T: TensorType> DerefMut for TensorDataNoCRepr<T> {
     #[inline]
     fn deref_mut(&mut self) -> &mut [T] {
         self.unpack();
-        if !T::is_repr_c() {
-            // If the slice is modified, the tensor is stale.
-            self.drop_tensor();
-        }
+        // If the slice is modified, the tensor is stale.
+        self.drop_tensor();
         unsafe { slice::from_raw_parts_mut(self.data.get(), self.data_count) }
+    }
+}
+
+impl<T: TensorType> Clone for TensorDataNoCRepr<T> {
+    fn clone(&self) -> Self {
+        let dims = unsafe { tensor_dims(self.inner.get()) };
+        let mut clone = TensorDataNoCRepr::new_inner(&dims);
+        clone.deref_mut().clone_from_slice(self.deref());
+        clone
+    }
+}
+
+/// Holds a multi-dimensional array of elements of a single data type.
+///
+/// The data buffer stores elements in row major order.  E.g. if data is treated
+/// as a vector of `T`:
+///
+/// ```text
+///   element 0:   index (0, ..., 0)
+///   element 1:   index (0, ..., 1)
+///   ...
+/// ```
+#[derive(Debug, Clone, Eq)]
+pub struct Tensor<T: TensorType> {
+    inner: T::InnerType,
+    dims: Vec<u64>,
+}
+
+#[inline]
+fn product(values: &[u64]) -> u64 {
+    values.iter().product()
+}
+
+impl<T: TensorType> Tensor<T> {
+    /// Creates a new tensor.
+    ///
+    /// The data is initialized to zeros.
+    pub fn new(dims: &[u64]) -> Self {
+        Tensor {
+            inner: T::InnerType::new_inner(dims),
+            dims: Vec::from(dims),
+        }
+    }
+
+    /// Sets (copies) the tensor values to the provided ones.
+    ///
+    /// ```
+    /// # use tensorflow::Tensor;
+    /// let a = Tensor::new(&[2, 2]).with_values(&[0_i32, 1, 2, 3]).unwrap();
+    /// ```
+    pub fn with_values(mut self, value: &[T]) -> Result<Self> {
+        if self.len() != value.len() {
+            return Err(invalid_arg!(
+                "length of values array ({}) is not equal to tensor total elements ({})",
+                value.len(),
+                self.len()
+            ));
+        }
+        for (e, v) in self.iter_mut().zip(value) {
+            e.clone_from(v);
+        }
+        Ok(self)
+    }
+
+    /// Returns the tensor's dimensions.
+    pub fn dims(&self) -> &[u64] {
+        &self.dims
+    }
+
+    // Wraps a TF_Tensor. Returns None if types don't match.
+    unsafe fn from_tf_tensor(tensor: *mut tf::TF_Tensor) -> Option<Self> {
+        let mut dims = Vec::with_capacity(tf::TF_NumDims(tensor) as usize);
+        for i in 0..dims.capacity() {
+            dims.push(tf::TF_Dim(tensor, i as c_int) as u64);
+        }
+
+        Some(Tensor {
+            inner: T::InnerType::from_tf_tensor(tensor)?,
+            dims: dims,
+        })
+    }
+}
+
+impl<T: TensorType> AnyTensor for Tensor<T> {
+    fn inner(&self) -> Result<*mut tf::TF_Tensor> {
+        self.inner.as_mut_ptr(&self.dims)
+    }
+}
+
+impl<T: TensorType> Deref for Tensor<T> {
+    type Target = [T];
+
+    #[inline]
+    fn deref(&self) -> &[T] {
+        self.inner.deref()
+    }
+}
+
+impl<T: TensorType> DerefMut for Tensor<T> {
+    #[inline]
+    fn deref_mut(&mut self) -> &mut [T] {
+        self.inner.deref_mut()
     }
 }
 
 impl<T: TensorType> From<T> for Tensor<T> {
     fn from(value: T) -> Self {
-        let mut tensor = Tensor::new(&[1]);
+        let mut tensor = Tensor::new(&[]);
         tensor[0] = value;
         tensor
     }
@@ -980,6 +1243,51 @@ impl<'a, T: TensorType> From<&'a [T]> for Tensor<T> {
             e.clone_from(v);
         }
         tensor
+    }
+}
+
+impl<T: TensorType + PartialEq> PartialEq for Tensor<T> {
+    fn eq(&self, other: &Tensor<T>) -> bool {
+        self.dims == other.dims && self.deref() == other.deref()
+    }
+}
+
+fn write_tensor_recursive<T: Display>(
+    f: &mut Formatter<'_>,
+    shape: &[u64],
+    values: &[T],
+) -> ::std::fmt::Result {
+    if shape.len() == 0 {
+        // Handle special case of a scalar tensor.
+        write!(f, "{}", values[0])
+    } else {
+        // Recur with values split into chunks of the next dims size,
+        // Surround with brackets and separate with comma.
+        write!(f, "[")?;
+
+        if shape[0] > 0 {
+            let chunk_size = values.len() / shape[0] as usize;
+
+            for i in 0..shape[0] as usize {
+                if i != 0 {
+                    write!(f, ", ")?;
+                }
+
+                write_tensor_recursive(
+                    f,
+                    &shape[1..],
+                    &values[i * chunk_size..(i + 1) * chunk_size],
+                )?;
+            }
+        }
+
+        write!(f, "]")
+    }
+}
+
+impl<T: TensorType> Display for Tensor<T> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> ::std::fmt::Result {
+        write_tensor_recursive(f, &self.dims, self)
     }
 }
 
@@ -1012,38 +1320,50 @@ impl Library {
 
 ////////////////////////
 
-/// This exposes Buffer behavior without making it public.
-trait BufferTrait {
-    fn is_owned(&self) -> bool;
-    fn set_owned(&mut self, owned: bool);
-    fn inner(&self) -> *const tf::TF_Buffer;
-    fn inner_mut(&mut self) -> *mut tf::TF_Buffer;
-}
-
-/// This exposes Graph behavior without making it public.
-trait GraphTrait {
-    fn inner(&self) -> *mut tf::TF_Graph;
-}
-
-
-/// This exposes Operation behavior without making it public.
-trait OperationTrait {
-    fn inner(&self) -> *mut tf::TF_Operation;
-}
-
-////////////////////////
-
 /// Returns a string describing version information of the
 /// `TensorFlow` library. `TensorFlow` is using semantic versioning.
 pub fn version() -> std::result::Result<String, Utf8Error> {
-    unsafe { CStr::from_ptr(tf::TF_Version()).to_str().map(|s| s.to_string()) }
+    unsafe {
+        CStr::from_ptr(tf::TF_Version())
+            .to_str()
+            .map(|s| s.to_string())
+    }
+}
+
+/// Returns a serialized KernelList protocol buffer containing KernelDefs for
+/// all registered kernels.
+pub fn get_all_registered_kernels() -> Result<Vec<u8>> {
+    let mut status = Status::new();
+    let buf = unsafe {
+        let buf = tf::TF_GetAllRegisteredKernels(status.inner());
+        if !status.is_ok() {
+            return Err(status);
+        }
+        Buffer::<u8>::from_c(buf, true)
+    };
+    Ok(Vec::from(buf.as_ref()))
+}
+
+/// Returns a serialized KernelList protocol buffer containing KernelDefs for
+/// all kernels registered for the operation named `name`.
+pub fn get_registered_kernels_for_op(name: &str) -> Result<Vec<u8>> {
+    let c_name = CString::new(name)?;
+    let mut status = Status::new();
+    let buf = unsafe {
+        let buf = tf::TF_GetRegisteredKernelsForOp(c_name.as_ptr(), status.inner());
+        if !status.is_ok() {
+            return Err(status);
+        }
+        Buffer::<u8>::from_c(buf, true)
+    };
+    Ok(Vec::from(buf.as_ref()))
 }
 
 ////////////////////////
 
 /// A Shape is the shape of a tensor.  A Shape may be an unknown rank, or it may
 /// have a known rank with each dimension being known or unknown.
-#[derive(Debug,Eq,Ord,PartialEq,PartialOrd,Hash,Clone)]
+#[derive(Debug, Eq, Ord, PartialEq, PartialOrd, Hash, Clone)]
 pub struct Shape(Option<Vec<Option<i64>>>);
 
 impl Shape {
@@ -1088,10 +1408,15 @@ impl Index<usize> for Shape {
 }
 
 impl Display for Shape {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         self.0.fmt(f)
     }
 }
+
+////////////////////////
+
+mod while_loop;
+pub use crate::while_loop::*;
 
 ////////////////////////
 
@@ -1128,6 +1453,17 @@ mod tests {
     }
 
     #[test]
+    fn test_tensor_native_type_zero() {
+        let tensor = <Tensor<i32>>::new(&[1000]);
+
+        // Checking against null-initialized slice/vector makes
+        // the unit test succeed often on repeated runs.
+        for v in tensor.as_ref() {
+            assert_eq!(0, *v);
+        }
+    }
+
+    #[test]
     fn test_set_target() {
         let mut options = SessionOptions::new();
         options.set_target("local").unwrap();
@@ -1144,31 +1480,30 @@ mod tests {
     fn test_run() {
         // Graph is just y = 2 * x
         let graph_proto = vec![
-      0x0a, 0x2a, 0x0a, 0x01, 0x78, 0x12, 0x0b, 0x50, 0x6c, 0x61, 0x63, 0x65, 0x68,
-      0x6f, 0x6c, 0x64, 0x65, 0x72, 0x2a, 0x0b, 0x0a, 0x05, 0x64, 0x74, 0x79, 0x70,
-      0x65, 0x12, 0x02, 0x30, 0x01, 0x2a, 0x0b, 0x0a, 0x05, 0x73, 0x68, 0x61, 0x70,
-      0x65, 0x12, 0x02, 0x3a, 0x00, 0x0a, 0x30, 0x0a, 0x03, 0x79, 0x2f, 0x79, 0x12,
-      0x05, 0x43, 0x6f, 0x6e, 0x73, 0x74, 0x2a, 0x0b, 0x0a, 0x05, 0x64, 0x74, 0x79,
-      0x70, 0x65, 0x12, 0x02, 0x30, 0x01, 0x2a, 0x15, 0x0a, 0x05, 0x76, 0x61, 0x6c,
-      0x75, 0x65, 0x12, 0x0c, 0x42, 0x0a, 0x08, 0x01, 0x12, 0x00, 0x2a, 0x04, 0x00,
-      0x00, 0x00, 0x40, 0x0a, 0x19, 0x0a, 0x01, 0x79, 0x12, 0x03, 0x4d, 0x75, 0x6c,
-      0x1a, 0x01, 0x78, 0x1a, 0x03, 0x79, 0x2f, 0x79, 0x2a, 0x07, 0x0a, 0x01, 0x54,
-      0x12, 0x02, 0x30, 0x01
-    ];
-        let (mut session, mut graph) = create_session();
+            0x0a, 0x2a, 0x0a, 0x01, 0x78, 0x12, 0x0b, 0x50, 0x6c, 0x61, 0x63, 0x65, 0x68, 0x6f,
+            0x6c, 0x64, 0x65, 0x72, 0x2a, 0x0b, 0x0a, 0x05, 0x64, 0x74, 0x79, 0x70, 0x65, 0x12,
+            0x02, 0x30, 0x01, 0x2a, 0x0b, 0x0a, 0x05, 0x73, 0x68, 0x61, 0x70, 0x65, 0x12, 0x02,
+            0x3a, 0x00, 0x0a, 0x30, 0x0a, 0x03, 0x79, 0x2f, 0x79, 0x12, 0x05, 0x43, 0x6f, 0x6e,
+            0x73, 0x74, 0x2a, 0x0b, 0x0a, 0x05, 0x64, 0x74, 0x79, 0x70, 0x65, 0x12, 0x02, 0x30,
+            0x01, 0x2a, 0x15, 0x0a, 0x05, 0x76, 0x61, 0x6c, 0x75, 0x65, 0x12, 0x0c, 0x42, 0x0a,
+            0x08, 0x01, 0x12, 0x00, 0x2a, 0x04, 0x00, 0x00, 0x00, 0x40, 0x0a, 0x19, 0x0a, 0x01,
+            0x79, 0x12, 0x03, 0x4d, 0x75, 0x6c, 0x1a, 0x01, 0x78, 0x1a, 0x03, 0x79, 0x2f, 0x79,
+            0x2a, 0x07, 0x0a, 0x01, 0x54, 0x12, 0x02, 0x30, 0x01,
+        ];
+        let (session, mut graph) = create_session();
         let opts = ImportGraphDefOptions::new();
         let status = graph.import_graph_def(&graph_proto, &opts);
         assert!(status.is_ok());
         let mut x = <Tensor<f32>>::new(&[2]);
         x[0] = 2.0;
         x[1] = 3.0;
-        let mut step = StepWithGraph::new();
+        let mut step = SessionRunArgs::new();
         let x_op = graph.operation_by_name_required("x").unwrap();
-        step.add_input(&x_op, 0, &x);
+        step.add_feed(&x_op, 0, &x);
         let y_op = graph.operation_by_name_required("y").unwrap();
-        let output_ix = step.request_output(&y_op, 0);
+        let output_ix = step.request_fetch(&y_op, 0);
         session.run(&mut step).unwrap();
-        let output_tensor = step.take_output::<f32>(output_ix).unwrap();
+        let output_tensor = step.fetch::<f32>(output_ix).unwrap();
         assert_eq!(output_tensor.len(), 2);
         assert_eq!(output_tensor[0], 4.0);
         assert_eq!(output_tensor[1], 6.0);
@@ -1196,6 +1531,16 @@ mod tests {
     }
 
     #[test]
+    fn test_f16() {
+        let data: Vec<f16> = vec![-1.0f32, 0.0, 1.0, 2.5]
+            .into_iter()
+            .map(|x| f16::from_f32(x))
+            .collect();
+        let tensor = <Tensor<f16>>::new(&[2, 2]).with_values(&data).unwrap();
+        assert_eq!(&tensor[..], &data[..]);
+    }
+
+    #[test]
     fn test_strings() {
         let mut g = Graph::new();
         let x_op = {
@@ -1206,24 +1551,71 @@ mod tests {
         };
         let y_op = {
             let mut nd = g.new_operation("EncodeBase64", "y").unwrap();
-            nd.add_input(Output {
-                operation: x_op.clone(),
-                index: 0,
-            });
+            nd.add_input(x_op.clone());
             nd.finish().unwrap()
         };
         let options = SessionOptions::new();
-        let mut session = Session::new(&options, &g).unwrap();
+        let session = Session::new(&options, &g).unwrap();
         let mut x = <Tensor<String>>::new(&[2]);
         x[0] = "foo".to_string();
         x[1] = "bar".to_string();
-        let mut step = StepWithGraph::new();
-        step.add_input(&x_op, 0, &x);
-        let output_ix = step.request_output(&y_op, 0);
+        let mut step = SessionRunArgs::new();
+        step.add_feed(&x_op, 0, &x);
+        let output_ix = step.request_fetch(&y_op, 0);
         session.run(&mut step).unwrap();
-        let output_tensor = step.take_output::<String>(output_ix).unwrap();
+        let output_tensor = step.fetch::<String>(output_ix).unwrap();
         assert_eq!(output_tensor.len(), 2);
         assert_eq!(output_tensor[0], "Zm9v");
         assert_eq!(output_tensor[1], "YmFy");
+    }
+
+    #[test]
+    fn tensor_clone() {
+        let x = Tensor::<i32>::new(&[3]).with_values(&[1, 2, 3]).unwrap();
+        let clone = x.clone();
+        assert_eq!(x, clone);
+    }
+
+    #[test]
+    fn tensor_eq() {
+        let a = Tensor::<i32>::new(&[3]).with_values(&[1, 2, 3]).unwrap();
+        let b = Tensor::<i32>::new(&[3]).with_values(&[1, 2, 3]).unwrap();
+        let c = Tensor::<i32>::new(&[3]).with_values(&[1, 2, 4]).unwrap();
+        let d = Tensor::<i32>::new(&[3, 1]).with_values(&[1, 2, 3]).unwrap();
+        assert_eq!(a, b);
+        assert_ne!(a, c);
+        assert_ne!(a, d);
+    }
+
+    #[test]
+    fn tensor_display() {
+        let tests = [
+            ("1", &[][..], &[1][..]),
+            ("[1]", &[1], &[1]),
+            ("[1, 2]", &[2], &[1, 2]),
+            ("[[1, 2], [3, 4]]", &[2, 2], &[1, 2, 3, 4]),
+            ("[[[1], [2]], [[3], [4]]]", &[2, 2, 1], &[1, 2, 3, 4]),
+            ("[[[1, 2]], [[3, 4]]]", &[2, 1, 2], &[1, 2, 3, 4]),
+            ("[[[[], []]], [[[], []]]]", &[2, 1, 2, 0], &[]),
+            ("[[], []]", &[2, 0], &[]),
+            ("[[], []]", &[2, 0, 2], &[]),
+            ("[]", &[0], &[]),
+            ("[]", &[0, 0], &[]),
+        ];
+
+        for &(expected, shape, values) in tests.iter() {
+            let tensor = Tensor::<i32>::new(shape).with_values(values).unwrap();
+            assert_eq!(expected, format!("{}", tensor));
+        }
+    }
+
+    #[test]
+    fn test_get_all_registered_kernels() {
+        assert!(get_all_registered_kernels().unwrap().len() > 0);
+    }
+
+    #[test]
+    fn test_get_registered_kernels_for_op() {
+        assert!(get_registered_kernels_for_op("Add").unwrap().len() > 0);
     }
 }

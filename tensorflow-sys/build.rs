@@ -24,8 +24,8 @@ const REPOSITORY: &'static str = "https://github.com/tensorflow/tensorflow.git";
 const FRAMEWORK_TARGET: &'static str = "tensorflow:libtensorflow_framework.so";
 const TARGET: &'static str = "tensorflow:libtensorflow.so";
 // `VERSION` and `TAG` are separate because the tag is not always `'v' + VERSION`.
-const VERSION: &'static str = "1.4.0";
-const TAG: &'static str = "v1.4.0";
+const VERSION: &'static str = "1.13.1";
+const TAG: &'static str = "v1.13.1";
 const MIN_BAZEL: &'static str = "0.5.4";
 
 macro_rules! get(($name:expr) => (ok!(env::var($name))));
@@ -38,6 +38,11 @@ macro_rules! log {
 macro_rules! log_var(($var:ident) => (log!(concat!(stringify!($var), " = {:?}"), $var)));
 
 fn main() {
+    if check_windows_lib() {
+        log!("Returning early because {} was already found", LIBRARY);
+        return;
+    }
+
     if pkg_config::find_library(LIBRARY).is_ok() {
         log!("Returning early because {} was already found", LIBRARY);
         return;
@@ -47,11 +52,36 @@ fn main() {
         Ok(s) => s == "true",
         Err(_) => false,
     };
-    if !force_src && env::consts::ARCH == "x86_64" && (env::consts::OS == "linux" || env::consts::OS == "macos") {
+
+    if !force_src
+        && env::consts::ARCH == "x86_64"
+        && (env::consts::OS == "linux" || env::consts::OS == "macos")
+    {
         install_prebuilt();
     } else {
         build_from_src();
     }
+}
+
+#[cfg(not(target_env = "msvc"))]
+fn check_windows_lib() -> bool {
+    false
+}
+
+#[cfg(target_env = "msvc")]
+fn check_windows_lib() -> bool {
+    let windows_lib: &str = &format!("{}.lib", LIBRARY);
+    if let Ok(path) = env::var("PATH") {
+        for p in path.split(";") {
+            let path = Path::new(p).join(windows_lib);
+            if path.exists() {
+                println!("cargo:rustc-link-lib=dylib={}", LIBRARY);
+                println!("cargo:rustc-link-search=native={}", p);
+                return true;
+            }
+        }
+    }
+    false
 }
 
 fn remove_suffix(value: &mut String, suffix: &str) {
@@ -63,7 +93,7 @@ fn remove_suffix(value: &mut String, suffix: &str) {
 
 fn extract<P: AsRef<Path>, P2: AsRef<Path>>(archive_path: P, extract_to: P2) {
     let file = File::open(archive_path).unwrap();
-    let unzipped = GzDecoder::new(file).unwrap();
+    let unzipped = GzDecoder::new(file);
     let mut a = Archive::new(unzipped);
     a.unpack(extract_to).unwrap();
 }
@@ -75,8 +105,13 @@ fn install_prebuilt() {
         "macos" => "darwin",
         x => x,
     };
-    let proc_type = if cfg!(feature = "tensorflow_gpu") {"gpu"} else {"cpu"};
-    let binary_url = format!(
+    let proc_type = if cfg!(feature = "tensorflow_gpu") {
+        "gpu"
+    } else {
+        "cpu"
+    };
+    let binary_url =
+        format!(
         "https://storage.googleapis.com/tensorflow/libtensorflow/libtensorflow-{}-{}-{}-{}.tar.gz",
         proc_type, os, env::consts::ARCH, VERSION);
     log_var!(binary_url);
@@ -100,14 +135,16 @@ fn install_prebuilt() {
         let mut writer = BufWriter::new(f);
         let mut easy = Easy::new();
         easy.url(&binary_url).unwrap();
-        easy.write_function(move |data| {
-            Ok(writer.write(data).unwrap())
-        }).unwrap();
+        easy.write_function(move |data| Ok(writer.write(data).unwrap()))
+            .unwrap();
         easy.perform().unwrap();
 
         let response_code = easy.response_code().unwrap();
         if response_code != 200 {
-            panic!("Unexpected response code {} for {}", response_code, binary_url);
+            panic!(
+                "Unexpected response code {} for {}",
+                response_code, binary_url
+            );
         }
     }
 
@@ -127,19 +164,37 @@ fn install_prebuilt() {
     let output = PathBuf::from(&get!("OUT_DIR"));
     let new_framework_library_full_path = output.join(&framework_library_file);
     if new_framework_library_full_path.exists() {
-        log!("File {} already exists, deleting.", new_framework_library_full_path.display());
+        log!(
+            "File {} already exists, deleting.",
+            new_framework_library_full_path.display()
+        );
         std::fs::remove_file(&new_framework_library_full_path).unwrap();
     }
     let new_library_full_path = output.join(&library_file);
     if new_library_full_path.exists() {
-        log!("File {} already exists, deleting.", new_library_full_path.display());
+        log!(
+            "File {} already exists, deleting.",
+            new_library_full_path.display()
+        );
         std::fs::remove_file(&new_library_full_path).unwrap();
     }
 
-    log!("Copying {} to {}...", library_full_path.display(), new_library_full_path.display());
+    log!(
+        "Copying {} to {}...",
+        library_full_path.display(),
+        new_library_full_path.display()
+    );
     std::fs::copy(&library_full_path, &new_library_full_path).unwrap();
-    log!("Copying {} to {}...", framework_library_full_path.display(), new_framework_library_full_path.display());
-    std::fs::copy(&framework_library_full_path, &new_framework_library_full_path).unwrap();
+    log!(
+        "Copying {} to {}...",
+        framework_library_full_path.display(),
+        new_framework_library_full_path.display()
+    );
+    std::fs::copy(
+        &framework_library_full_path,
+        &new_framework_library_full_path,
+    )
+    .unwrap();
     println!("cargo:rustc-link-search={}", output.display());
 }
 
@@ -161,12 +216,17 @@ fn build_from_src() {
     let library_path = lib_dir.join(format!("lib{}.so", LIBRARY));
     log_var!(library_path);
     if library_path.exists() && framework_library_path.exists() {
-        log!("{:?} and {:?} already exist, not building", library_path, framework_library_path);
+        log!(
+            "{:?} and {:?} already exist, not building",
+            library_path,
+            framework_library_path
+        );
     } else {
         if let Err(e) = check_bazel() {
-            println!("cargo:error=Bazel must be installed at version {} or greater. (Error: {})",
-                     MIN_BAZEL,
-                     e);
+            println!(
+                "cargo:error=Bazel must be installed at version {} or greater. (Error: {})",
+                MIN_BAZEL, e
+            );
             process::exit(1);
         }
         let framework_target_path = &FRAMEWORK_TARGET.replace(":", "/");
@@ -175,7 +235,8 @@ fn build_from_src() {
         log_var!(target_path);
         if !Path::new(&source.join(".git")).exists() {
             run("git", |command| {
-                command.arg("clone")
+                command
+                    .arg("clone")
                     .arg(format!("--branch={}", TAG))
                     .arg("--recursive")
                     .arg(REPOSITORY)
@@ -188,23 +249,45 @@ fn build_from_src() {
         let configure_hint_file_pb = source.join(".rust-configured");
         let configure_hint_file = Path::new(&configure_hint_file_pb);
         if !configure_hint_file.exists() {
-            run("bash",
-                |command| command.current_dir(&source)
-                .env("TF_NEED_CUDA", if cfg!(feature = "tensorflow_gpu") {"1"} else {"0"})
-                .arg("-c")
-                .arg("yes ''|./configure"));
+            run("bash", |command| {
+                command
+                    .current_dir(&source)
+                    .env(
+                        "TF_NEED_CUDA",
+                        if cfg!(feature = "tensorflow_gpu") {
+                            "1"
+                        } else {
+                            "0"
+                        },
+                    )
+                    .arg("-c")
+                    .arg("yes ''|./configure")
+            });
             File::create(configure_hint_file).unwrap();
         }
+        // Allows us to pass in --incompatible_load_argument_is_label=false
+        // to work around https://github.com/tensorflow/tensorflow/issues/15492
+        let bazel_args_string = if let Ok(args) = env::var("TF_RUST_BAZEL_OPTS") {
+            args
+        } else {
+            "".to_string()
+        };
         run("bazel", |command| {
-            command.current_dir(&source)
+            command
+                .current_dir(&source)
                 .arg("build")
                 .arg(format!("--jobs={}", get!("NUM_JOBS")))
                 .arg("--compilation_mode=opt")
                 .arg("--copt=-march=native")
+                .args(bazel_args_string.split_whitespace())
                 .arg(TARGET)
         });
         let framework_target_bazel_bin = source.join("bazel-bin").join(framework_target_path);
-        log!("Copying {:?} to {:?}", framework_target_bazel_bin, framework_library_path);
+        log!(
+            "Copying {:?} to {:?}",
+            framework_target_bazel_bin,
+            framework_library_path
+        );
         fs::copy(framework_target_bazel_bin, framework_library_path).unwrap();
         let target_bazel_bin = source.join("bazel-bin").join(target_path);
         log!("Copying {:?} to {:?}", target_bazel_bin, library_path);
@@ -217,7 +300,8 @@ fn build_from_src() {
 }
 
 fn run<F>(name: &str, mut configure: F)
-    where F: FnMut(&mut Command) -> &mut Command
+where
+    F: FnMut(&mut Command) -> &mut Command,
 {
     let mut command = Command::new(name);
     let configured = configure(&mut command);
@@ -245,7 +329,8 @@ fn check_bazel() -> Result<(), Box<Error>> {
     for line in stdout.lines() {
         if line.starts_with("Build label:") {
             found_version = true;
-            let mut version_str = line.split(":")
+            let mut version_str = line
+                .split(":")
                 .nth(1)
                 .unwrap()
                 .split(" ")
@@ -259,10 +344,11 @@ fn check_bazel() -> Result<(), Box<Error>> {
             let version = Version::parse(version_str)?;
             let want = Version::parse(MIN_BAZEL)?;
             if version < want {
-                return Err(format!("Installed version {} is less than required version {}",
-                                   version_str,
-                                   MIN_BAZEL)
-                    .into());
+                return Err(format!(
+                    "Installed version {} is less than required version {}",
+                    version_str, MIN_BAZEL
+                )
+                .into());
             }
         }
     }

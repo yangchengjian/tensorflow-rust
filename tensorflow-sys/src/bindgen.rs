@@ -19,19 +19,34 @@ pub const _ATFILE_SOURCE: ::std::os::raw::c_uint = 1;
 pub const __USE_MISC: ::std::os::raw::c_uint = 1;
 pub const __USE_ATFILE: ::std::os::raw::c_uint = 1;
 pub const __USE_FORTIFY_LEVEL: ::std::os::raw::c_uint = 0;
+pub const __GLIBC_USE_DEPRECATED_GETS: ::std::os::raw::c_uint = 0;
 pub const _STDC_PREDEF_H: ::std::os::raw::c_uint = 1;
 pub const __STDC_IEC_559__: ::std::os::raw::c_uint = 1;
 pub const __STDC_IEC_559_COMPLEX__: ::std::os::raw::c_uint = 1;
-pub const __STDC_ISO_10646__: ::std::os::raw::c_uint = 201505;
+pub const __STDC_ISO_10646__: ::std::os::raw::c_uint = 201706;
 pub const __STDC_NO_THREADS__: ::std::os::raw::c_uint = 1;
 pub const __GNU_LIBRARY__: ::std::os::raw::c_uint = 6;
 pub const __GLIBC__: ::std::os::raw::c_uint = 2;
-pub const __GLIBC_MINOR__: ::std::os::raw::c_uint = 23;
+pub const __GLIBC_MINOR__: ::std::os::raw::c_uint = 26;
 pub const _SYS_CDEFS_H: ::std::os::raw::c_uint = 1;
+pub const __glibc_c99_flexarr_available: ::std::os::raw::c_uint = 1;
 pub const __WORDSIZE: ::std::os::raw::c_uint = 64;
 pub const __WORDSIZE_TIME64_COMPAT32: ::std::os::raw::c_uint = 1;
 pub const __SYSCALL_WORDSIZE: ::std::os::raw::c_uint = 64;
+pub const __HAVE_GENERIC_SELECTION: ::std::os::raw::c_uint = 1;
+pub const __GLIBC_USE_LIB_EXT2: ::std::os::raw::c_uint = 0;
+pub const __GLIBC_USE_IEC_60559_BFP_EXT: ::std::os::raw::c_uint = 0;
+pub const __GLIBC_USE_IEC_60559_FUNCS_EXT: ::std::os::raw::c_uint = 0;
+pub const __GLIBC_USE_IEC_60559_TYPES_EXT: ::std::os::raw::c_uint = 0;
+pub const _BITS_TYPES_H: ::std::os::raw::c_uint = 1;
+pub const _BITS_TYPESIZES_H: ::std::os::raw::c_uint = 1;
+pub const __OFF_T_MATCHES_OFF64_T: ::std::os::raw::c_uint = 1;
+pub const __INO_T_MATCHES_INO64_T: ::std::os::raw::c_uint = 1;
+pub const __RLIM_T_MATCHES_RLIM64_T: ::std::os::raw::c_uint = 1;
+pub const __FD_SETSIZE: ::std::os::raw::c_uint = 1024;
 pub const _BITS_WCHAR_H: ::std::os::raw::c_uint = 1;
+pub const _BITS_STDINT_INTN_H: ::std::os::raw::c_uint = 1;
+pub const _BITS_STDINT_UINTN_H: ::std::os::raw::c_uint = 1;
 pub const INT8_MIN: ::std::os::raw::c_int = -128;
 pub const INT16_MIN: ::std::os::raw::c_int = -32768;
 pub const INT32_MIN: ::std::os::raw::c_int = -2147483648;
@@ -70,6 +85,80 @@ pub const SIZE_MAX: ::std::os::raw::c_int = -1;
 pub const WINT_MIN: ::std::os::raw::c_uint = 0;
 pub const WINT_MAX: ::std::os::raw::c_uint = 4294967295;
 pub type wchar_t = ::std::os::raw::c_int;
+pub type __u_char = ::std::os::raw::c_uchar;
+pub type __u_short = ::std::os::raw::c_ushort;
+pub type __u_int = ::std::os::raw::c_uint;
+pub type __u_long = ::std::os::raw::c_ulong;
+pub type __int8_t = ::std::os::raw::c_schar;
+pub type __uint8_t = ::std::os::raw::c_uchar;
+pub type __int16_t = ::std::os::raw::c_short;
+pub type __uint16_t = ::std::os::raw::c_ushort;
+pub type __int32_t = ::std::os::raw::c_int;
+pub type __uint32_t = ::std::os::raw::c_uint;
+pub type __int64_t = ::std::os::raw::c_long;
+pub type __uint64_t = ::std::os::raw::c_ulong;
+pub type __quad_t = ::std::os::raw::c_long;
+pub type __u_quad_t = ::std::os::raw::c_ulong;
+pub type __intmax_t = ::std::os::raw::c_long;
+pub type __uintmax_t = ::std::os::raw::c_ulong;
+pub type __dev_t = ::std::os::raw::c_ulong;
+pub type __uid_t = ::std::os::raw::c_uint;
+pub type __gid_t = ::std::os::raw::c_uint;
+pub type __ino_t = ::std::os::raw::c_ulong;
+pub type __ino64_t = ::std::os::raw::c_ulong;
+pub type __mode_t = ::std::os::raw::c_uint;
+pub type __nlink_t = ::std::os::raw::c_ulong;
+pub type __off_t = ::std::os::raw::c_long;
+pub type __off64_t = ::std::os::raw::c_long;
+pub type __pid_t = ::std::os::raw::c_int;
+#[repr(C)]
+#[derive(Debug, Copy)]
+pub struct __fsid_t {
+    pub __val: [::std::os::raw::c_int; 2usize],
+}
+#[test]
+fn bindgen_test_layout___fsid_t() {
+    assert_eq!(::std::mem::size_of::<__fsid_t>() , 8usize , concat ! (
+               "Size of: " , stringify ! ( __fsid_t ) ));
+    assert_eq! (::std::mem::align_of::<__fsid_t>() , 4usize , concat ! (
+                "Alignment of " , stringify ! ( __fsid_t ) ));
+    assert_eq! (unsafe {
+                & ( * ( 0 as * const __fsid_t ) ) . __val as * const _ as
+                usize } , 0usize , concat ! (
+                "Alignment of field: " , stringify ! ( __fsid_t ) , "::" ,
+                stringify ! ( __val ) ));
+}
+impl Clone for __fsid_t {
+    fn clone(&self) -> Self { *self }
+}
+pub type __clock_t = ::std::os::raw::c_long;
+pub type __rlim_t = ::std::os::raw::c_ulong;
+pub type __rlim64_t = ::std::os::raw::c_ulong;
+pub type __id_t = ::std::os::raw::c_uint;
+pub type __time_t = ::std::os::raw::c_long;
+pub type __useconds_t = ::std::os::raw::c_uint;
+pub type __suseconds_t = ::std::os::raw::c_long;
+pub type __daddr_t = ::std::os::raw::c_int;
+pub type __key_t = ::std::os::raw::c_int;
+pub type __clockid_t = ::std::os::raw::c_int;
+pub type __timer_t = *mut ::std::os::raw::c_void;
+pub type __blksize_t = ::std::os::raw::c_long;
+pub type __blkcnt_t = ::std::os::raw::c_long;
+pub type __blkcnt64_t = ::std::os::raw::c_long;
+pub type __fsblkcnt_t = ::std::os::raw::c_ulong;
+pub type __fsblkcnt64_t = ::std::os::raw::c_ulong;
+pub type __fsfilcnt_t = ::std::os::raw::c_ulong;
+pub type __fsfilcnt64_t = ::std::os::raw::c_ulong;
+pub type __fsword_t = ::std::os::raw::c_long;
+pub type __ssize_t = ::std::os::raw::c_long;
+pub type __syscall_slong_t = ::std::os::raw::c_long;
+pub type __syscall_ulong_t = ::std::os::raw::c_ulong;
+pub type __loff_t = __off64_t;
+pub type __qaddr_t = *mut __quad_t;
+pub type __caddr_t = *mut ::std::os::raw::c_char;
+pub type __intptr_t = ::std::os::raw::c_long;
+pub type __socklen_t = ::std::os::raw::c_uint;
+pub type __sig_atomic_t = ::std::os::raw::c_int;
 pub type int_least8_t = ::std::os::raw::c_schar;
 pub type int_least16_t = ::std::os::raw::c_short;
 pub type int_least32_t = ::std::os::raw::c_int;
@@ -86,8 +175,8 @@ pub type uint_fast8_t = ::std::os::raw::c_uchar;
 pub type uint_fast16_t = ::std::os::raw::c_ulong;
 pub type uint_fast32_t = ::std::os::raw::c_ulong;
 pub type uint_fast64_t = ::std::os::raw::c_ulong;
-pub type intmax_t = ::std::os::raw::c_long;
-pub type uintmax_t = ::std::os::raw::c_ulong;
+pub type intmax_t = __intmax_t;
+pub type uintmax_t = __uintmax_t;
 extern "C" {
     pub fn TF_Version() -> *const ::std::os::raw::c_char;
 }
@@ -115,6 +204,9 @@ pub enum TF_DataType {
     TF_COMPLEX128 = 18,
     TF_HALF = 19,
     TF_RESOURCE = 20,
+    TF_VARIANT = 21,
+    TF_UINT32 = 22,
+    TF_UINT64 = 23,
 }
 extern "C" {
     pub fn TF_DataTypeSize(dt: TF_DataType) -> usize;
@@ -363,6 +455,16 @@ fn bindgen_test_layout_TF_Output() {
 impl Clone for TF_Output {
     fn clone(&self) -> Self { *self }
 }
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct TF_Function {
+    _unused: [u8; 0],
+}
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct TF_FunctionOptions {
+    _unused: [u8; 0],
+}
 extern "C" {
     pub fn TF_GraphSetTensorShape(graph: *mut TF_Graph, output: TF_Output,
                                   dims: *const i64,
@@ -462,6 +564,12 @@ extern "C" {
                               attr_name: *const ::std::os::raw::c_char,
                               values: *const TF_DataType,
                               num_values: ::std::os::raw::c_int);
+}
+extern "C" {
+    pub fn TF_SetAttrFuncName(desc: *mut TF_OperationDescription,
+                              attr_name: *const ::std::os::raw::c_char,
+                              value: *const ::std::os::raw::c_char,
+                              length: usize);
 }
 extern "C" {
     pub fn TF_SetAttrShape(desc: *mut TF_OperationDescription,
@@ -793,6 +901,17 @@ extern "C" {
                               output_graph_def: *mut TF_Buffer,
                               status: *mut TF_Status);
 }
+extern "C" {
+    pub fn TF_GraphGetOpDef(graph: *mut TF_Graph,
+                            op_name: *const ::std::os::raw::c_char,
+                            output_op_def: *mut TF_Buffer,
+                            status: *mut TF_Status);
+}
+extern "C" {
+    pub fn TF_GraphVersions(graph: *mut TF_Graph,
+                            output_version_def: *mut TF_Buffer,
+                            status: *mut TF_Status);
+}
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct TF_ImportGraphDefOptions {
@@ -810,6 +929,24 @@ extern "C" {
                                                  *mut TF_ImportGraphDefOptions,
                                              prefix:
                                                  *const ::std::os::raw::c_char);
+}
+extern "C" {
+    pub fn TF_ImportGraphDefOptionsSetDefaultDevice(opts:
+                                                        *mut TF_ImportGraphDefOptions,
+                                                    device:
+                                                        *const ::std::os::raw::c_char);
+}
+extern "C" {
+    pub fn TF_ImportGraphDefOptionsSetUniquifyNames(opts:
+                                                        *mut TF_ImportGraphDefOptions,
+                                                    uniquify_names:
+                                                        ::std::os::raw::c_uchar);
+}
+extern "C" {
+    pub fn TF_ImportGraphDefOptionsSetUniquifyPrefix(opts:
+                                                         *mut TF_ImportGraphDefOptions,
+                                                     uniquify_prefix:
+                                                         ::std::os::raw::c_uchar);
 }
 extern "C" {
     pub fn TF_ImportGraphDefOptionsAddInputMapping(opts:
@@ -848,6 +985,60 @@ extern "C" {
      -> ::std::os::raw::c_int;
 }
 extern "C" {
+    pub fn TF_ImportGraphDefOptionsAddReturnOperation(opts:
+                                                          *mut TF_ImportGraphDefOptions,
+                                                      oper_name:
+                                                          *const ::std::os::raw::c_char);
+}
+extern "C" {
+    pub fn TF_ImportGraphDefOptionsNumReturnOperations(opts:
+                                                           *const TF_ImportGraphDefOptions)
+     -> ::std::os::raw::c_int;
+}
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct TF_ImportGraphDefResults {
+    _unused: [u8; 0],
+}
+extern "C" {
+    pub fn TF_ImportGraphDefResultsReturnOutputs(results:
+                                                     *mut TF_ImportGraphDefResults,
+                                                 num_outputs:
+                                                     *mut ::std::os::raw::c_int,
+                                                 outputs:
+                                                     *mut *mut TF_Output);
+}
+extern "C" {
+    pub fn TF_ImportGraphDefResultsReturnOperations(results:
+                                                        *mut TF_ImportGraphDefResults,
+                                                    num_opers:
+                                                        *mut ::std::os::raw::c_int,
+                                                    opers:
+                                                        *mut *mut *mut TF_Operation);
+}
+extern "C" {
+    pub fn TF_ImportGraphDefResultsMissingUnusedInputMappings(results:
+                                                                  *mut TF_ImportGraphDefResults,
+                                                              num_missing_unused_input_mappings:
+                                                                  *mut ::std::os::raw::c_int,
+                                                              src_names:
+                                                                  *mut *mut *const ::std::os::raw::c_char,
+                                                              src_indexes:
+                                                                  *mut *mut ::std::os::raw::c_int);
+}
+extern "C" {
+    pub fn TF_DeleteImportGraphDefResults(results:
+                                              *mut TF_ImportGraphDefResults);
+}
+extern "C" {
+    pub fn TF_GraphImportGraphDefWithResults(graph: *mut TF_Graph,
+                                             graph_def: *const TF_Buffer,
+                                             options:
+                                                 *const TF_ImportGraphDefOptions,
+                                             status: *mut TF_Status)
+     -> *mut TF_ImportGraphDefResults;
+}
+extern "C" {
     pub fn TF_GraphImportGraphDefWithReturnOutputs(graph: *mut TF_Graph,
                                                    graph_def:
                                                        *const TF_Buffer,
@@ -864,6 +1055,21 @@ extern "C" {
                                   graph_def: *const TF_Buffer,
                                   options: *const TF_ImportGraphDefOptions,
                                   status: *mut TF_Status);
+}
+extern "C" {
+    pub fn TF_GraphCopyFunction(g: *mut TF_Graph, func: *const TF_Function,
+                                grad: *const TF_Function,
+                                status: *mut TF_Status);
+}
+extern "C" {
+    pub fn TF_GraphNumFunctions(g: *mut TF_Graph) -> ::std::os::raw::c_int;
+}
+extern "C" {
+    pub fn TF_GraphGetFunctions(g: *mut TF_Graph,
+                                funcs: *mut *mut TF_Function,
+                                max_func: ::std::os::raw::c_int,
+                                status: *mut TF_Status)
+     -> ::std::os::raw::c_int;
 }
 extern "C" {
     pub fn TF_OperationToNodeDef(oper: *mut TF_Operation,
@@ -949,6 +1155,72 @@ extern "C" {
                            ny: ::std::os::raw::c_int, x: *mut TF_Output,
                            nx: ::std::os::raw::c_int, dx: *mut TF_Output,
                            status: *mut TF_Status, dy: *mut TF_Output);
+}
+extern "C" {
+    pub fn TF_AddGradientsWithPrefix(g: *mut TF_Graph,
+                                     prefix: *const ::std::os::raw::c_char,
+                                     y: *mut TF_Output,
+                                     ny: ::std::os::raw::c_int,
+                                     x: *mut TF_Output,
+                                     nx: ::std::os::raw::c_int,
+                                     dx: *mut TF_Output,
+                                     status: *mut TF_Status,
+                                     dy: *mut TF_Output);
+}
+extern "C" {
+    pub fn TF_GraphToFunction(fn_body: *const TF_Graph,
+                              fn_name: *const ::std::os::raw::c_char,
+                              append_hash_to_fn_name: ::std::os::raw::c_uchar,
+                              num_opers: ::std::os::raw::c_int,
+                              opers: *const *const TF_Operation,
+                              ninputs: ::std::os::raw::c_int,
+                              inputs: *const TF_Output,
+                              noutputs: ::std::os::raw::c_int,
+                              outputs: *const TF_Output,
+                              output_names:
+                                  *const *const ::std::os::raw::c_char,
+                              opts: *const TF_FunctionOptions,
+                              description: *const ::std::os::raw::c_char,
+                              status: *mut TF_Status) -> *mut TF_Function;
+}
+extern "C" {
+    pub fn TF_FunctionName(func: *mut TF_Function)
+     -> *const ::std::os::raw::c_char;
+}
+extern "C" {
+    pub fn TF_FunctionToFunctionDef(func: *mut TF_Function,
+                                    output_func_def: *mut TF_Buffer,
+                                    status: *mut TF_Status);
+}
+extern "C" {
+    pub fn TF_FunctionImportFunctionDef(proto: *const ::std::os::raw::c_void,
+                                        proto_len: usize,
+                                        status: *mut TF_Status)
+     -> *mut TF_Function;
+}
+extern "C" {
+    pub fn TF_FunctionSetAttrValueProto(func: *mut TF_Function,
+                                        attr_name:
+                                            *const ::std::os::raw::c_char,
+                                        proto: *const ::std::os::raw::c_void,
+                                        proto_len: usize,
+                                        status: *mut TF_Status);
+}
+extern "C" {
+    pub fn TF_FunctionGetAttrValueProto(func: *mut TF_Function,
+                                        attr_name:
+                                            *const ::std::os::raw::c_char,
+                                        output_attr_value: *mut TF_Buffer,
+                                        status: *mut TF_Status);
+}
+extern "C" {
+    pub fn TF_DeleteFunction(func: *mut TF_Function);
+}
+extern "C" {
+    pub fn TF_TryEvaluateConstant(graph: *mut TF_Graph, output: TF_Output,
+                                  result: *mut *mut TF_Tensor,
+                                  status: *mut TF_Status)
+     -> ::std::os::raw::c_uchar;
 }
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
@@ -1108,19 +1380,24 @@ extern "C" {
 extern "C" {
     pub fn TF_DeviceListName(list: *const TF_DeviceList,
                              index: ::std::os::raw::c_int,
-                             arg1: *mut TF_Status)
+                             status: *mut TF_Status)
      -> *const ::std::os::raw::c_char;
 }
 extern "C" {
     pub fn TF_DeviceListType(list: *const TF_DeviceList,
                              index: ::std::os::raw::c_int,
-                             arg1: *mut TF_Status)
+                             status: *mut TF_Status)
      -> *const ::std::os::raw::c_char;
 }
 extern "C" {
     pub fn TF_DeviceListMemoryBytes(list: *const TF_DeviceList,
                                     index: ::std::os::raw::c_int,
-                                    arg1: *mut TF_Status) -> i64;
+                                    status: *mut TF_Status) -> i64;
+}
+extern "C" {
+    pub fn TF_DeviceListIncarnation(list: *const TF_DeviceList,
+                                    index: ::std::os::raw::c_int,
+                                    status: *mut TF_Status) -> u64;
 }
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
@@ -1139,4 +1416,62 @@ extern "C" {
 }
 extern "C" {
     pub fn TF_GetAllOpList() -> *mut TF_Buffer;
+}
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct TF_ApiDefMap {
+    _unused: [u8; 0],
+}
+extern "C" {
+    pub fn TF_NewApiDefMap(op_list_buffer: *mut TF_Buffer,
+                           status: *mut TF_Status) -> *mut TF_ApiDefMap;
+}
+extern "C" {
+    pub fn TF_DeleteApiDefMap(apimap: *mut TF_ApiDefMap);
+}
+extern "C" {
+    pub fn TF_ApiDefMapPut(api_def_map: *mut TF_ApiDefMap,
+                           text: *const ::std::os::raw::c_char,
+                           text_len: usize, status: *mut TF_Status);
+}
+extern "C" {
+    pub fn TF_ApiDefMapGet(api_def_map: *mut TF_ApiDefMap,
+                           name: *const ::std::os::raw::c_char,
+                           name_len: usize, status: *mut TF_Status)
+     -> *mut TF_Buffer;
+}
+extern "C" {
+    pub fn TF_GetAllRegisteredKernels(status: *mut TF_Status)
+     -> *mut TF_Buffer;
+}
+extern "C" {
+    pub fn TF_GetRegisteredKernelsForOp(name: *const ::std::os::raw::c_char,
+                                        status: *mut TF_Status)
+     -> *mut TF_Buffer;
+}
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct TF_Server {
+    _unused: [u8; 0],
+}
+extern "C" {
+    pub fn TF_NewServer(proto: *const ::std::os::raw::c_void,
+                        proto_len: usize, status: *mut TF_Status)
+     -> *mut TF_Server;
+}
+extern "C" {
+    pub fn TF_ServerStart(server: *mut TF_Server, status: *mut TF_Status);
+}
+extern "C" {
+    pub fn TF_ServerStop(server: *mut TF_Server, status: *mut TF_Status);
+}
+extern "C" {
+    pub fn TF_ServerJoin(server: *mut TF_Server, status: *mut TF_Status);
+}
+extern "C" {
+    pub fn TF_ServerTarget(server: *mut TF_Server)
+     -> *const ::std::os::raw::c_char;
+}
+extern "C" {
+    pub fn TF_DeleteServer(server: *mut TF_Server);
 }

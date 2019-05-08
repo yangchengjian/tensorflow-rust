@@ -1,5 +1,4 @@
 language: rust
-sudo: false
 dist: trusty # still in beta, but required for the prebuilt TF binaries
 
 cache:
@@ -13,8 +12,8 @@ rust:
 env:
   global:
     - RUST_BACKTRACE=1
-    - CC="gcc-4.9"
-    - CXX="g++-4.9"
+    # - CC="gcc-4.9"
+    # - CXX="g++-4.9"
   matrix:
     # Building TensorFlow in Travis is not working properly, probably due
     # to resources constraints.
@@ -36,6 +35,9 @@ install:
   - if [[ "$TF_RUST_BUILD_FROM_SRC" == "true" ]]; then source travis-ci/install.sh; fi
   - if [[ "$TF_RUST_BUILD_FROM_SRC" == "true" ]]; then pip install --user numpy; fi
 
+before_script:
+  - rustup component add rustfmt
+
 script:
   - ./test-all
 
@@ -45,8 +47,9 @@ addons:
       - ubuntu-toolchain-r-test
 
     packages:
-      - g++-4.9
-      - gcc-4.9
+      # Re-enable if we ever re-enable building from source on Travis. Only needed for building TensorFlow itself, not the Rust bindings.
+      # - g++-4.9
+      # - gcc-4.9
       - oracle-java8-installer
       - swig
 

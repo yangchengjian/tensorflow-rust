@@ -1,12 +1,9 @@
-extern crate tensorflow_sys as tf;
-
-use libc;
+use super::TensorType;
 use libc::c_void;
 use libc::size_t;
 use std::borrow::Borrow;
 use std::borrow::BorrowMut;
 use std::cmp;
-use std::ffi::CStr;
 use std::marker::PhantomData;
 use std::mem;
 use std::ops::Deref;
@@ -18,16 +15,14 @@ use std::ops::RangeFrom;
 use std::ops::RangeFull;
 use std::ops::RangeTo;
 use std::os::raw::c_void as std_c_void;
-use std::ptr;
 use std::slice;
-use super::BufferTrait;
-use super::TensorType;
+use tensorflow_sys as tf;
 
 /// Fixed-length heap-allocated vector.
 /// This is basically a `Box<[T]>`, except that that type can't actually be constructed.
 /// Furthermore, `[T; N]` can't be constructed if N is not a compile-time constant.
 #[derive(Debug)]
-pub struct Buffer<T: TensorType> {
+pub(crate) struct Buffer<T: TensorType> {
     inner: *mut tf::TF_Buffer,
     owned: bool,
     phantom: PhantomData<T>,
@@ -59,18 +54,28 @@ impl<T: TensorType> Buffer<T> {
         // posix_memalign requires the alignment to be at least sizeof(void*).
         // TODO: Use alloc::heap::allocate once it's stable, or at least
         // libc::aligned_alloc once it exists
-        let mut ptr = ptr::null::<c_void>() as *mut c_void;
-        let err = libc::posix_memalign(&mut ptr, align, alloc_size);
-        if err != 0 {
-            let c_msg = libc::strerror(err);
-            let msg = CStr::from_ptr(c_msg);
-            panic!("Failed to allocate: {}", msg.to_str().unwrap());
+        let ptr = aligned_alloc::aligned_alloc(alloc_size, align);
+
+        // We cannot be sure that we can deallocate always.
+        // For Linux it would be OK, but for Windows it's not.
+        if !ptr.is_null() {
+            (*inner).data_deallocator = Some(deallocator);
+        } else if len > 0 {
+            panic!("Failed to allocate {} aligned by {}", alloc_size, align);
         }
         (*inner).data = ptr as *mut std_c_void;
         (*inner).length = len;
-        (*inner).data_deallocator = Some(deallocator);
         Buffer {
             inner: inner,
+            owned: true,
+            phantom: PhantomData,
+        }
+    }
+
+    /// Creates a new buffer with no memory allocated.
+    pub unsafe fn new_unallocated() -> Self {
+        Buffer {
+            inner: tf::TF_NewBuffer(),
             owned: true,
             phantom: PhantomData,
         }
@@ -118,28 +123,18 @@ impl<T: TensorType> Buffer<T> {
             phantom: PhantomData,
         }
     }
-}
 
-impl<T: TensorType> BufferTrait for Buffer<T> {
-    fn is_owned(&self) -> bool {
-        self.owned
-    }
-
-    fn set_owned(&mut self, owned: bool) {
-        self.owned = owned;
-    }
-
-    fn inner(&self) -> *const tf::TF_Buffer {
+    pub fn inner(&self) -> *const tf::TF_Buffer {
         self.inner
     }
 
-    fn inner_mut(&mut self) -> *mut tf::TF_Buffer {
+    pub fn inner_mut(&mut self) -> *mut tf::TF_Buffer {
         self.inner
     }
 }
 
 unsafe extern "C" fn deallocator(data: *mut std_c_void, _length: size_t) {
-    libc::free(data as *mut c_void);
+    aligned_alloc::aligned_free(data as *mut ());
 }
 
 impl<T: TensorType> Drop for Buffer<T> {
@@ -197,7 +192,8 @@ impl<T: TensorType> BorrowMut<[T]> for Buffer<T> {
 }
 
 impl<T: TensorType> Clone for Buffer<T>
-    where T: Clone
+where
+    T: Clone,
 {
     #[inline]
     fn clone(&self) -> Buffer<T> {
@@ -211,10 +207,12 @@ impl<T: TensorType> Clone for Buffer<T>
 
     #[inline]
     fn clone_from(&mut self, other: &Buffer<T>) {
-        assert!(self.length() == other.length(),
-                "self.length() = {}, other.length() = {}",
-                self.length(),
-                other.length());
+        assert!(
+            self.length() == other.length(),
+            "self.length() = {}, other.length() = {}",
+            self.length(),
+            other.length()
+        );
         // TODO: Use std::ptr::copy for primitives once we have impl specialization
         for i in 0..self.length() {
             self[i] = other[i].clone();
@@ -227,10 +225,12 @@ impl<T: TensorType> Index<usize> for Buffer<T> {
 
     #[inline]
     fn index(&self, index: usize) -> &T {
-        assert!(index < self.length(),
-                "index = {}, length = {}",
-                index,
-                self.length());
+        assert!(
+            index < self.length(),
+            "index = {}, length = {}",
+            index,
+            self.length()
+        );
         unsafe { &*self.data().offset(index as isize) }
     }
 }
@@ -238,10 +238,12 @@ impl<T: TensorType> Index<usize> for Buffer<T> {
 impl<T: TensorType> IndexMut<usize> for Buffer<T> {
     #[inline]
     fn index_mut(&mut self, index: usize) -> &mut T {
-        assert!(index < self.length(),
-                "index = {}, length = {}",
-                index,
-                self.length());
+        assert!(
+            index < self.length(),
+            "index = {}, length = {}",
+            index,
+            self.length()
+        );
         unsafe { &mut *self.data_mut().offset(index as isize) }
     }
 }
@@ -251,14 +253,18 @@ impl<T: TensorType> Index<Range<usize>> for Buffer<T> {
 
     #[inline]
     fn index(&self, index: Range<usize>) -> &[T] {
-        assert!(index.start <= index.end,
-                "index.start = {}, index.end = {}",
-                index.start,
-                index.end);
-        assert!(index.end <= self.length(),
-                "index.end = {}, length = {}",
-                index.end,
-                self.length());
+        assert!(
+            index.start <= index.end,
+            "index.start = {}, index.end = {}",
+            index.start,
+            index.end
+        );
+        assert!(
+            index.end <= self.length(),
+            "index.end = {}, length = {}",
+            index.end,
+            self.length()
+        );
         unsafe { slice::from_raw_parts(&*self.data().offset(index.start as isize), index.len()) }
     }
 }
@@ -266,17 +272,23 @@ impl<T: TensorType> Index<Range<usize>> for Buffer<T> {
 impl<T: TensorType> IndexMut<Range<usize>> for Buffer<T> {
     #[inline]
     fn index_mut(&mut self, index: Range<usize>) -> &mut [T] {
-        assert!(index.start <= index.end,
-                "index.start = {}, index.end = {}",
-                index.start,
-                index.end);
-        assert!(index.end <= self.length(),
-                "index.end = {}, length = {}",
-                index.end,
-                self.length());
+        assert!(
+            index.start <= index.end,
+            "index.start = {}, index.end = {}",
+            index.start,
+            index.end
+        );
+        assert!(
+            index.end <= self.length(),
+            "index.end = {}, length = {}",
+            index.end,
+            self.length()
+        );
         unsafe {
-            slice::from_raw_parts_mut(&mut *self.data_mut().offset(index.start as isize),
-                                      index.len())
+            slice::from_raw_parts_mut(
+                &mut *self.data_mut().offset(index.start as isize),
+                index.len(),
+            )
         }
     }
 }
@@ -286,10 +298,12 @@ impl<T: TensorType> Index<RangeTo<usize>> for Buffer<T> {
 
     #[inline]
     fn index(&self, index: RangeTo<usize>) -> &[T] {
-        assert!(index.end <= self.length(),
-                "index.end = {}, length = {}",
-                index.end,
-                self.length());
+        assert!(
+            index.end <= self.length(),
+            "index.end = {}, length = {}",
+            index.end,
+            self.length()
+        );
         unsafe { slice::from_raw_parts(&*self.data(), index.end) }
     }
 }
@@ -297,10 +311,12 @@ impl<T: TensorType> Index<RangeTo<usize>> for Buffer<T> {
 impl<T: TensorType> IndexMut<RangeTo<usize>> for Buffer<T> {
     #[inline]
     fn index_mut(&mut self, index: RangeTo<usize>) -> &mut [T] {
-        assert!(index.end <= self.length(),
-                "index.end = {}, length = {}",
-                index.end,
-                self.length());
+        assert!(
+            index.end <= self.length(),
+            "index.end = {}, length = {}",
+            index.end,
+            self.length()
+        );
         unsafe { slice::from_raw_parts_mut(&mut *self.data_mut(), index.end) }
     }
 }
@@ -310,13 +326,17 @@ impl<T: TensorType> Index<RangeFrom<usize>> for Buffer<T> {
 
     #[inline]
     fn index(&self, index: RangeFrom<usize>) -> &[T] {
-        assert!(index.start <= self.length(),
-                "index.start = {}, length = {}",
-                index.start,
-                self.length());
+        assert!(
+            index.start <= self.length(),
+            "index.start = {}, length = {}",
+            index.start,
+            self.length()
+        );
         unsafe {
-            slice::from_raw_parts(&*self.data().offset(index.start as isize),
-                                  self.length() - index.start)
+            slice::from_raw_parts(
+                &*self.data().offset(index.start as isize),
+                self.length() - index.start,
+            )
         }
     }
 }
@@ -324,13 +344,17 @@ impl<T: TensorType> Index<RangeFrom<usize>> for Buffer<T> {
 impl<T: TensorType> IndexMut<RangeFrom<usize>> for Buffer<T> {
     #[inline]
     fn index_mut(&mut self, index: RangeFrom<usize>) -> &mut [T] {
-        assert!(index.start <= self.length(),
-                "index.start = {}, length = {}",
-                index.start,
-                self.length());
+        assert!(
+            index.start <= self.length(),
+            "index.start = {}, length = {}",
+            index.start,
+            self.length()
+        );
         unsafe {
-            slice::from_raw_parts_mut(&mut *self.data_mut().offset(index.start as isize),
-                                      self.length() - index.start)
+            slice::from_raw_parts_mut(
+                &mut *self.data_mut().offset(index.start as isize),
+                self.length() - index.start,
+            )
         }
     }
 }

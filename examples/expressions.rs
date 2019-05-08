@@ -1,20 +1,21 @@
-#![cfg_attr(feature="nightly", feature(alloc_system))]
-#[cfg(feature="nightly")]
-extern crate alloc_system;
 extern crate random;
 extern crate tensorflow;
 
 use std::error::Error;
-use std::result::Result;
 use std::process::exit;
-use tensorflow::Code;
+use std::result::Result;
 use tensorflow::expr::{Compiler, Placeholder};
+use tensorflow::Code;
 use tensorflow::Graph;
 use tensorflow::Session;
 use tensorflow::SessionOptions;
+use tensorflow::SessionRunArgs;
 use tensorflow::Status;
-use tensorflow::StepWithGraph;
 use tensorflow::Tensor;
+
+#[cfg_attr(feature = "examples_system_alloc", global_allocator)]
+#[cfg(feature = "examples_system_alloc")]
+static ALLOCATOR: std::alloc::System = std::alloc::System;
 
 fn main() {
     // Putting the main code in another function serves two purposes:
@@ -44,11 +45,13 @@ impl Checker {
 
     fn check(&mut self, name: &str, expected: f32, actual: f32) {
         let success = (expected - actual).abs() < self.epsilon;
-        println!("Checking {}: expected {}, got {}. {}",
-                 name,
-                 expected,
-                 actual,
-                 if success { "Success!" } else { "FAIL" });
+        println!(
+            "Checking {}: expected {}, got {}. {}",
+            name,
+            expected,
+            actual,
+            if success { "Success!" } else { "FAIL" }
+        );
         self.success &= success;
     }
 
@@ -56,7 +59,10 @@ impl Checker {
         if self.success {
             Ok(())
         } else {
-            Err(Box::new(Status::new_set(Code::Internal, "At least one check failed")?))
+            Err(Box::new(Status::new_set(
+                Code::Internal,
+                "At least one check failed",
+            )?))
         }
     }
 }
@@ -79,19 +85,19 @@ fn run() -> Result<(), Box<Error>> {
     //   (x_node, y_node)
     // };
     let options = SessionOptions::new();
-    let mut session = Session::new(&options, &g)?;
+    let session = Session::new(&options, &g)?;
 
     // Evaluate the graph.
     let mut x = <Tensor<f32>>::new(&[2]);
     x[0] = 2.0;
     x[1] = 3.0;
-    let mut step = StepWithGraph::new();
-    step.add_input(&x_node, 0, &x);
-    let output_token = step.request_output(&y_node, 0);
+    let mut step = SessionRunArgs::new();
+    step.add_feed(&x_node, 0, &x);
+    let output_token = step.request_fetch(&y_node, 0);
     session.run(&mut step).unwrap();
 
     // Check our results.
-    let output_tensor = step.take_output::<f32>(output_token)?;
+    let output_tensor = step.fetch::<f32>(output_token)?;
     let mut checker = Checker::new(1e-3);
     checker.check("output_tensor[0]", 5.0, output_tensor[0]);
     checker.check("output_tensor[1]", 7.0, output_tensor[1]);
