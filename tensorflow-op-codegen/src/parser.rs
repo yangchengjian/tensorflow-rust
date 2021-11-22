@@ -5,6 +5,8 @@
 use crate::protos::AttrValue;
 use crate::protos::AttrValue_ListValue;
 use crate::protos::DataType;
+use crate::protos::FullTypeDef;
+use crate::protos::FullTypeId;
 use crate::protos::OpDef;
 use crate::protos::OpDef_ArgDef;
 use crate::protos::OpDef_AttrDef;
@@ -28,13 +30,14 @@ use nom::error::VerboseError;
 use nom::multi::many0;
 use nom::multi::many1;
 use nom::multi::many_till;
-use nom::multi::separated_list;
+use nom::multi::separated_list0;
 use nom::sequence::delimited;
 use nom::sequence::pair;
 use nom::sequence::preceded;
 use nom::sequence::terminated;
 use nom::IResult;
 use protobuf::Message;
+use protobuf::ProtobufEnum;
 use protobuf::ProtobufError;
 use std::error::Error;
 use std::fmt;
@@ -46,12 +49,12 @@ fn merge_protos<M: Message>(ops: Vec<M>) -> Result<M, ProtobufError> {
     for op in ops {
         op.write_to_vec(&mut out)?;
     }
-    protobuf::parse_from_bytes(&out)
+    Message::parse_from_bytes(&out)
 }
 
 type ParseResult<'a, O> = IResult<&'a [u8], O, VerboseError<&'a [u8]>>;
 
-fn space<'a>() -> impl Fn(&'a [u8]) -> ParseResult<'a, ()> {
+fn space<'a>() -> impl FnMut(&'a [u8]) -> ParseResult<'a, ()> {
     map(many0(one_of(" \t\r\n")), |_| ())
 }
 
@@ -155,6 +158,22 @@ fn data_type<'a>(input: &'a [u8]) -> ParseResult<'a, DataType> {
     })(input)
 }
 
+fn type_id<'a>(input: &'a [u8]) -> ParseResult<'a, FullTypeId> {
+    map_res(identifier, |s| {
+        match FullTypeId::values()
+            .iter()
+            .filter(|d| d.descriptor().name() == s)
+            .next()
+        {
+            Some(d) => Ok(FullTypeId::from_i32(d.value()).unwrap()),
+            None => Err(nom::Err::<VerboseError<&'a [u8]>>::Error(make_error(
+                input,
+                ErrorKind::Alt,
+            ))),
+        }
+    })(input)
+}
+
 fn scalar_field<'a, M, T, Parser, ParserFactory, S>(
     name: &'a str,
     parser_factory: ParserFactory,
@@ -225,6 +244,14 @@ where
     scalar_field(name, || data_type, setter)
 }
 
+fn type_id_field<'a, M, S>(name: &'a str, setter: S) -> impl Fn(&'a [u8]) -> ParseResult<'a, M>
+where
+    M: Message,
+    S: Fn(&mut M, FullTypeId),
+{
+    scalar_field(name, || type_id, setter)
+}
+
 fn raw_message_field<'a, M, F>(name: &'a str, parser: F, input: &'a [u8]) -> ParseResult<'a, M>
 where
     M: Message,
@@ -260,12 +287,12 @@ where
     }
 }
 
-fn message<'a, M, F>(field: F) -> impl Fn(&'a [u8]) -> ParseResult<'a, M>
+fn message<'a, M, F>(field: F) -> impl FnMut(&'a [u8]) -> ParseResult<'a, M>
 where
     M: Message,
-    F: Fn(&'a [u8]) -> ParseResult<'a, M>,
+    F: FnMut(&'a [u8]) -> ParseResult<'a, M>,
 {
-    map_res(separated_list(space(), field), merge_protos)
+    map_res(separated_list0(space(), field), merge_protos)
 }
 
 fn tensor_shape_proto_dim<'a>(input: &'a [u8]) -> ParseResult<'a, TensorShapeProto_Dim> {
@@ -346,6 +373,18 @@ fn attr<'a>(input: &'a [u8]) -> ParseResult<'a, OpDef_AttrDef> {
     )))(input)
 }
 
+fn experimental_full_type<'a>(input: &'a [u8]) -> ParseResult<'a, FullTypeDef> {
+    message(alt((
+        type_id_field("type_id", FullTypeDef::set_type_id),
+        message_field(
+            "args",
+            || experimental_full_type,
+            |m: &mut FullTypeDef, v| m.mut_args().push(v),
+        ),
+        string_field("s", FullTypeDef::set_s),
+    )))(input)
+}
+
 fn arg_def<'a>(input: &'a [u8]) -> ParseResult<'a, OpDef_ArgDef> {
     message(alt((
         string_field("name", OpDef_ArgDef::set_name),
@@ -355,6 +394,11 @@ fn arg_def<'a>(input: &'a [u8]) -> ParseResult<'a, OpDef_ArgDef> {
         string_field("type_list_attr", OpDef_ArgDef::set_type_list_attr),
         string_field("number_attr", OpDef_ArgDef::set_number_attr),
         boolean_field("is_ref", OpDef_ArgDef::set_is_ref),
+        message_field(
+            "experimental_full_type",
+            || experimental_full_type,
+            |m: &mut OpDef_ArgDef, v| m.set_experimental_full_type(v),
+        ),
     )))(input)
 }
 
@@ -386,6 +430,10 @@ fn op_def<'a>(input: &'a [u8]) -> ParseResult<'a, OpDef> {
             boolean_field("is_aggregate", OpDef::set_is_aggregate),
             boolean_field("is_commutative", OpDef::set_is_commutative),
             boolean_field("is_stateful", OpDef::set_is_stateful),
+            boolean_field(
+                "is_distributed_communication",
+                OpDef::set_is_distributed_communication,
+            ),
             boolean_field(
                 "allows_uninitialized_input",
                 OpDef::set_allows_uninitialized_input,

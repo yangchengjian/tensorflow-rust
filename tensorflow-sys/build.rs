@@ -18,21 +18,21 @@ use semver::Version;
 use tar::Archive;
 use zip::ZipArchive;
 
-const FRAMEWORK_LIBRARY: &'static str = "tensorflow_framework";
-const LIBRARY: &'static str = "tensorflow";
-const REPOSITORY: &'static str = "https://github.com/tensorflow/tensorflow.git";
-const FRAMEWORK_TARGET: &'static str = "tensorflow:libtensorflow_framework";
-const TARGET: &'static str = "tensorflow:libtensorflow";
+const FRAMEWORK_LIBRARY: &str = "tensorflow_framework";
+const LIBRARY: &str = "tensorflow";
+const REPOSITORY: &str = "https://github.com/tensorflow/tensorflow.git";
+const FRAMEWORK_TARGET: &str = "tensorflow:libtensorflow_framework";
+const TARGET: &str = "tensorflow:libtensorflow";
 // `VERSION` and `TAG` are separate because the tag is not always `'v' + VERSION`.
-const VERSION: &'static str = "2.3.0";
-const TAG: &'static str = "v2.3.0";
-const MIN_BAZEL: &'static str = "0.5.4";
+const VERSION: &str = "2.6.0";
+const TAG: &str = "v2.6.0";
+const MIN_BAZEL: &str = "3.7.2";
 
 macro_rules! get(($name:expr) => (ok!(env::var($name))));
 macro_rules! ok(($expression:expr) => ($expression.unwrap()));
 macro_rules! log {
-    ($fmt:expr) => (println!(concat!("libtensorflow-sys/build.rs:{}: ", $fmt), line!()));
-    ($fmt:expr, $($arg:tt)*) => (println!(concat!("libtensorflow-sys/build.rs:{}: ", $fmt),
+    ($fmt:expr) => (println!(concat!("tensorflow-sys/build.rs:{}: ", $fmt), line!()));
+    ($fmt:expr, $($arg:tt)*) => (println!(concat!("tensorflow-sys/build.rs:{}: ", $fmt),
     line!(), $($arg)*));
 }
 macro_rules! log_var(($var:ident) => (log!(concat!(stringify!($var), " = {:?}"), $var)));
@@ -101,7 +101,7 @@ fn check_windows_lib() -> bool {
     }
     let windows_lib: &str = &format!("{}.lib", LIBRARY);
     if let Ok(path) = env::var("PATH") {
-        for p in path.split(";") {
+        for p in path.split(';') {
             let path = Path::new(p).join(windows_lib);
             if path.exists() {
                 println!("cargo:rustc-link-lib=dylib={}", LIBRARY);
@@ -200,7 +200,7 @@ fn install_prebuilt() {
         ext
     );
     log_var!(binary_url);
-    let short_file_name = binary_url.split("/").last().unwrap();
+    let short_file_name = binary_url.split('/').last().unwrap();
     let mut base_name = short_file_name.to_string();
     remove_suffix(&mut base_name, ext);
     log_var!(base_name);
@@ -296,8 +296,8 @@ fn symlink<P: AsRef<Path>, P2: AsRef<Path>>(target: P, link: P2) {
 
 fn build_from_src() {
     let dll_suffix = dll_suffix();
-    let framework_target = FRAMEWORK_TARGET.to_string() + &dll_suffix;
-    let target = TARGET.to_string() + &dll_suffix;
+    let framework_target = FRAMEWORK_TARGET.to_string() + dll_suffix;
+    let target = TARGET.to_string() + dll_suffix;
 
     let output = PathBuf::from(&get!("OUT_DIR"));
     log_var!(output);
@@ -442,10 +442,10 @@ fn check_bazel() -> Result<(), Box<dyn Error>> {
         if line.starts_with("Build label:") {
             found_version = true;
             let mut version_str = line
-                .split(":")
+                .split(':')
                 .nth(1)
                 .unwrap()
-                .split(" ")
+                .split(' ')
                 .nth(1)
                 .unwrap()
                 .trim();

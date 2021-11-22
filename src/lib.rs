@@ -16,11 +16,13 @@
 )]
 
 use half::f16;
+use libc::size_t;
 use libc::{c_int, c_uint};
 #[cfg(feature = "ndarray")]
 use ndarray::{Array, ArrayBase, Data, Dim, Dimension, IxDynImpl};
 use num_complex::Complex;
 use protobuf::ProtobufEnum;
+use std::alloc;
 use std::borrow::Borrow;
 use std::cell::Cell;
 use std::cell::RefCell;
@@ -42,6 +44,8 @@ use std::ops::DerefMut;
 use std::ops::Drop;
 use std::ops::Index;
 use std::os::raw::c_char;
+use std::os::raw::c_void as std_c_void;
+use std::process;
 use std::ptr;
 use std::slice;
 use std::str::Utf8Error;
@@ -671,14 +675,9 @@ pub trait TensorType: Default + Clone + Display + Debug + 'static {
     /// type or some other error occurred.
     fn unpack(data: &[u8], count: usize) -> Result<Vec<Self>>;
 
-    /// Returns the number of bytes in the packed representation.  If
-    /// `is_repr_c()` returns true, this will return 0.
-    fn packed_size(data: &[Self]) -> usize;
-
     /// Packs data for sending to C.  Returns an error if `is_repr_c()` returns
-    /// true for this type or some other error occurred.  The size of the buffer
-    /// must be at least as large as the value returned by `packed_size(data)`.
-    fn pack(data: &[Self], buffer: &mut [u8]) -> Result<()>;
+    /// true for this type or some other error occurred.
+    fn pack(data: &[Self], dims: &[u64]) -> Result<*mut tf::TF_Tensor>;
 }
 
 macro_rules! tensor_type {
@@ -710,11 +709,7 @@ macro_rules! tensor_type {
                 .unwrap())
             }
 
-            fn packed_size(_data: &[Self]) -> usize {
-                0
-            }
-
-            fn pack(_data: &[Self], _buffer: &mut [u8]) -> Result<()> {
+            fn pack(_data: &[Self], _dims: &[u64]) -> Result<*mut tf::TF_Tensor> {
                 Err(Status::new_set(
                     Code::Unimplemented,
                     concat!("Packing is not necessary for ", stringify!($rust_type)),
@@ -725,7 +720,7 @@ macro_rules! tensor_type {
     };
 }
 
-tensor_type!(f16, Half, half::consts::ZERO, half::consts::ONE);
+tensor_type!(f16, Half, f16::ZERO, f16::ONE);
 tensor_type!(f32, Float, 0.0, 1.0);
 tensor_type!(f64, Double, 0.0, 1.0);
 tensor_type!(i32, Int32, 0, 1);
@@ -846,6 +841,26 @@ tensor_type!(
 
 ////////////////////////
 
+unsafe extern "C" fn string_deallocator(
+    data: *mut std_c_void,
+    length: size_t,
+    _deallocator_arg: *mut std_c_void,
+) {
+    let align = mem::align_of::<tf::TF_TString>();
+    let size = mem::size_of::<tf::TF_TString>();
+    let layout = alloc::Layout::from_size_align(length, align).unwrap_or_else(|_| {
+        eprintln!("internal error: failed to construct layout");
+        // make sure not to unwind
+        process::abort();
+    });
+    let count = length / size;
+    let tstrings = slice::from_raw_parts_mut(data as *mut tf::TF_TString, count);
+    for i in 0..count {
+        tf::TF_StringDealloc(&mut tstrings[i]);
+    }
+    alloc::dealloc(data as *mut _, layout);
+}
+
 impl TensorType for String {
     type InnerType = TensorDataNoCRepr<String>;
 
@@ -866,57 +881,58 @@ impl TensorType for String {
     }
 
     fn unpack(data: &[u8], count: usize) -> Result<Vec<Self>> {
-        let offsets = unsafe { slice::from_raw_parts(data.as_ptr() as *const u64, count) };
+        let tstrings =
+            unsafe { slice::from_raw_parts(data.as_ptr() as *const tf::TF_TString, count) };
         let mut out = Vec::with_capacity(count);
-        let mut status = Status::new();
-        let base_offset = mem::size_of::<u64>() * count;
-        for offset in offsets {
-            let off = *offset as usize + base_offset;
-            #[allow(trivial_casts)]
-            let src = &data[off] as *const u8 as *const c_char;
-            let src_len = data.len() - off;
-            let mut dst_len: usize = 0;
-            let mut dst: *const c_char = ptr::null();
-            unsafe {
-                tf::TF_StringDecode(src, src_len, &mut dst, &mut dst_len, status.inner());
-            }
-            if !status.is_ok() {
-                return Err(status);
-            }
-            let string_data = unsafe { slice::from_raw_parts(dst as *const u8, dst_len) };
-            out.push(std::str::from_utf8(string_data)?.to_string());
+        for i in 0..count {
+            let byte_slice = unsafe {
+                slice::from_raw_parts(
+                    tf::TF_StringGetDataPointer(&tstrings[i]) as *const u8,
+                    tf::TF_StringGetSize(&tstrings[i]),
+                )
+            };
+            out.push(std::str::from_utf8(byte_slice)?.to_string());
         }
         Ok(out)
     }
 
-    fn packed_size(data: &[Self]) -> usize {
-        let string_data: usize = data
-            .iter()
-            .map(|s| unsafe { tf::TF_StringEncodedSize(s.len()) })
-            .sum();
-        mem::size_of::<u64>() * data.len() + string_data
-    }
-
-    fn pack(data: &[Self], buffer: &mut [u8]) -> Result<()> {
-        let offsets: &mut [u64] =
-            unsafe { slice::from_raw_parts_mut(buffer.as_mut_ptr() as *mut u64, data.len()) };
-        let base_offset = mem::size_of::<u64>() * data.len();
-        let mut offset = base_offset;
-        let mut status = Status::new();
-        for i in 0..data.len() {
-            offsets[i] = (offset - base_offset) as u64;
-            let src = data[i].as_ptr() as *const c_char;
-            let src_len = data[i].len();
-            let dst: *mut u8 = &mut buffer[offset];
-            let dst_len = buffer.len() - offset;
-            offset += unsafe {
-                tf::TF_StringEncode(src, src_len, dst as *mut c_char, dst_len, status.inner())
-            };
-            if !status.is_ok() {
-                return Err(status);
+    fn pack(data: &[Self], dims: &[u64]) -> Result<*mut tf::TF_Tensor> {
+        let align = mem::align_of::<tf::TF_TString>();
+        let size = mem::size_of::<tf::TF_TString>();
+        let packed_size = data.len() * size;
+        let inner = unsafe {
+            let ptr =
+                alloc::alloc(alloc::Layout::from_size_align(size * data.len(), align).unwrap());
+            assert!(!ptr.is_null(), "allocation failure");
+            let inner = tf::TF_NewTensor(
+                DataType::String.to_c(),
+                dims.as_ptr() as *const _,
+                dims.len() as c_int,
+                ptr as *mut std_c_void,
+                size * data.len(),
+                Some(string_deallocator),
+                ptr::null_mut(),
+            );
+            if inner.is_null() {
+                return Err(Status::new_set_lossy(
+                    crate::Code::Internal,
+                    "TF_NewTensor returned null",
+                ));
             }
-        }
-        Ok(())
+            let buf = slice::from_raw_parts_mut(ptr, packed_size);
+            let tstrings =
+                slice::from_raw_parts_mut(buf.as_ptr() as *mut tf::TF_TString, data.len());
+            for i in 0..data.len() {
+                tf::TF_StringInit(&mut tstrings[i]);
+                tf::TF_StringCopy(
+                    &mut tstrings[i],
+                    data[i].as_bytes().as_ptr() as *const c_char,
+                    data[i].len(),
+                );
+            }
+            inner
+        };
+        Ok(inner)
     }
 }
 
@@ -1147,22 +1163,9 @@ where
 
     fn as_mut_ptr(&self, dims: &[u64]) -> Result<*mut tf::TF_Tensor> {
         let mut inner = self.inner.get();
-
         if inner.is_null() {
             let data: &[T] = self;
-            let packed_size = T::packed_size(data);
-            inner = unsafe {
-                let inner = tf::TF_AllocateTensor(
-                    T::data_type().to_c(),
-                    dims.as_ptr() as *const _,
-                    dims.len() as c_int,
-                    packed_size,
-                );
-                let buf =
-                    slice::from_raw_parts_mut(tf::TF_TensorData(inner) as *mut u8, packed_size);
-                T::pack(data, buf)?;
-                inner
-            };
+            inner = T::pack(data, dims)?;
             self.inner.set(inner);
         }
 
@@ -1417,6 +1420,20 @@ impl<'a, T: TensorType> From<&'a [T]> for Tensor<T> {
     }
 }
 
+#[rustversion::since(1.51)]
+impl<'a, T: TensorType, const N: usize> From<[T; N]> for Tensor<T> {
+    fn from(data: [T; N]) -> Tensor<T> {
+        Tensor::from(&data[..])
+    }
+}
+
+#[rustversion::since(1.51)]
+impl<'a, T: TensorType, const N: usize> From<&[T; N]> for Tensor<T> {
+    fn from(data: &[T; N]) -> Tensor<T> {
+        Tensor::from(&data[..])
+    }
+}
+
 #[cfg(feature = "ndarray")]
 /// Convert any ndarray::ArrayBase type into a tensorflow::Tensor
 impl<T, S, D> From<ArrayBase<S, D>> for Tensor<T>
@@ -1525,8 +1542,8 @@ impl Library {
                 (*heap_buf).length = stack_buf.length;
                 Buffer::<u8>::from_c(heap_buf, true)
             };
-            let op_proto: protos::op_def::OpList =
-                protobuf::parse_from_bytes(&buf).map_err(|e| {
+            let op_proto: protos::op_def::OpList = protobuf::Message::parse_from_bytes(&buf)
+                .map_err(|e| {
                     Status::new_set_lossy(
                         Code::InvalidArgument,
                         &format!("Invalid serialized OpList: {}", e),
@@ -2030,14 +2047,78 @@ macro_rules! shape_from_array {
     };
 }
 
+#[rustversion::not(since(1.51))]
 shape_from_array!(0);
+#[rustversion::not(since(1.51))]
 shape_from_array!(1);
+#[rustversion::not(since(1.51))]
 shape_from_array!(2);
+#[rustversion::not(since(1.51))]
 shape_from_array!(3);
+#[rustversion::not(since(1.51))]
 shape_from_array!(4);
+#[rustversion::not(since(1.51))]
 shape_from_array!(5);
+#[rustversion::not(since(1.51))]
 shape_from_array!(6);
+#[rustversion::not(since(1.51))]
 shape_from_array!(7);
+
+#[rustversion::since(1.51)]
+impl<const N: usize> From<[i32; N]> for Shape {
+    fn from(data: [i32; N]) -> Shape {
+        Shape::from(&data[..])
+    }
+}
+
+#[rustversion::since(1.51)]
+impl<const N: usize> From<[u32; N]> for Shape {
+    fn from(data: [u32; N]) -> Shape {
+        Shape::from(&data[..])
+    }
+}
+
+#[rustversion::since(1.51)]
+impl<const N: usize> From<[i64; N]> for Shape {
+    fn from(data: [i64; N]) -> Shape {
+        Shape::from(&data[..])
+    }
+}
+
+#[rustversion::since(1.51)]
+impl<const N: usize> From<[u64; N]> for Shape {
+    fn from(data: [u64; N]) -> Shape {
+        Shape::from(&data[..])
+    }
+}
+
+#[rustversion::since(1.51)]
+impl<const N: usize> From<&[i32; N]> for Shape {
+    fn from(data: &[i32; N]) -> Shape {
+        Shape::from(&data[..])
+    }
+}
+
+#[rustversion::since(1.51)]
+impl<const N: usize> From<&[u32; N]> for Shape {
+    fn from(data: &[u32; N]) -> Shape {
+        Shape::from(&data[..])
+    }
+}
+
+#[rustversion::since(1.51)]
+impl<const N: usize> From<&[i64; N]> for Shape {
+    fn from(data: &[i64; N]) -> Shape {
+        Shape::from(&data[..])
+    }
+}
+
+#[rustversion::since(1.51)]
+impl<const N: usize> From<&[u64; N]> for Shape {
+    fn from(data: &[u64; N]) -> Shape {
+        Shape::from(&data[..])
+    }
+}
 
 impl Into<Option<Vec<Option<i64>>>> for Shape {
     fn into(self) -> Option<Vec<Option<i64>>> {
@@ -2214,16 +2295,16 @@ mod tests {
         let options = SessionOptions::new();
         let session = Session::new(&options, &g).unwrap();
         let mut x = <Tensor<String>>::new(&[2]);
-        x[0] = "foo".to_string();
-        x[1] = "bar".to_string();
+        x[0] = "This is a long string.".to_string();
+        x[1] = "This is another long string.".to_string();
         let mut step = SessionRunArgs::new();
         step.add_feed(&x_op, 0, &x);
         let output_ix = step.request_fetch(&y_op, 0);
         session.run(&mut step).unwrap();
         let output_tensor = step.fetch::<String>(output_ix).unwrap();
         assert_eq!(output_tensor.len(), 2);
-        assert_eq!(output_tensor[0], "Zm9v");
-        assert_eq!(output_tensor[1], "YmFy");
+        assert_eq!(output_tensor[0], "VGhpcyBpcyBhIGxvbmcgc3RyaW5nLg");
+        assert_eq!(output_tensor[1], "VGhpcyBpcyBhbm90aGVyIGxvbmcgc3RyaW5nLg");
     }
 
     #[test]
@@ -2242,6 +2323,20 @@ mod tests {
         assert_eq!(a, b);
         assert_ne!(a, c);
         assert_ne!(a, d);
+    }
+
+    #[rustversion::since(1.51)]
+    #[test]
+    fn tensor_from_array() {
+        let x = Tensor::<i32>::from([1, 2, 3]);
+        assert_eq!(x.as_ref(), &[1, 2, 3]);
+    }
+
+    #[rustversion::since(1.51)]
+    #[test]
+    fn tensor_from_array_ref() {
+        let x = Tensor::<i32>::from(&[1, 2, 3]);
+        assert_eq!(x.as_ref(), &[1, 2, 3]);
     }
 
     #[test]
@@ -2311,7 +2406,8 @@ mod tests {
         // This test is not yet implemented for Windows
         let check_path = match std::env::consts::OS {
             "linux" => Some("test_resources/library/linux/test_op.so"),
-            "macos" => Some("test_resources/library/macos/test_op.so"),
+            // TODO: The test op needs to be recompiled for macos.
+            // "macos" => Some("test_resources/library/macos/test_op.so"),
             _ => None,
         };
         if let Some(path) = check_path {
@@ -2342,5 +2438,23 @@ mod tests {
     #[test]
     fn shape_from_array1_ref() {
         assert_eq!(Shape::from(&[1]), Shape::from(&[1][..]));
+    }
+
+    #[rustversion::since(1.51)]
+    #[test]
+    fn shape_from_array8() {
+        assert_eq!(
+            Shape::from([1, 2, 3, 4, 5, 6, 7, 8]),
+            Shape::from(&[1, 2, 3, 4, 5, 6, 7, 8][..])
+        );
+    }
+
+    #[rustversion::since(1.51)]
+    #[test]
+    fn shape_from_array8_ref() {
+        assert_eq!(
+            Shape::from(&[1, 2, 3, 4, 5, 6, 7, 8]),
+            Shape::from(&[1, 2, 3, 4, 5, 6, 7, 8][..])
+        );
     }
 }
